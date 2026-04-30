@@ -1,0 +1,46 @@
+package view
+
+import "golangkanban/internal/store"
+
+templ BoardsPage(boards []store.Board, pageError string) {
+	@Layout("Boards", BoardsContent(boards, pageError))
+}
+
+templ BoardsContent(boards []store.Board, pageError string) {
+	<main class="mx-auto flex min-h-dvh w-full max-w-6xl flex-col gap-8 px-4 py-8 sm:px-6 lg:px-8">
+		<header class="flex flex-col gap-5 border-b border-zinc-200 pb-6 sm:flex-row sm:items-end sm:justify-between">
+			<div class="space-y-2">
+				<p class="text-sm font-medium text-zinc-500">GolangKanban</p>
+				<h1 class="text-balance text-3xl font-semibold text-zinc-950">ボード</h1>
+				<p class="max-w-2xl text-pretty text-sm text-zinc-600">ローカルで使うシンプルなカンバンボードです。</p>
+			</div>
+			<form action="/boards" method="post" class="form flex w-full flex-col gap-2 sm:w-96">
+				<label for="board-title" class="label">新しいボード</label>
+				<div class="flex items-center gap-2">
+					<input id="board-title" class="input" type="text" name="title" placeholder="例: プロダクト開発" required/>
+					<button type="submit" class="btn whitespace-nowrap">作成</button>
+				</div>
+				if pageError != "" {
+					<p class="text-sm text-red-600">{ pageError }</p>
+				}
+			</form>
+		</header>
+		if len(boards) == 0 {
+			<section class="flex min-h-64 flex-col items-center justify-center gap-3 rounded-md border border-dashed border-zinc-300 bg-white p-8 text-center">
+				<h2 class="text-balance text-xl font-semibold">まだボードがありません</h2>
+				<p class="max-w-md text-pretty text-sm text-zinc-600">最初のボード名を入力して、リストとカードの整理を始められます。</p>
+			</section>
+		} else {
+			<section class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+				for _, board := range boards {
+					<a href={ boardURL(board.ID) } class="rounded-md border border-zinc-200 bg-white p-5 shadow-sm transition hover:border-zinc-300 hover:shadow">
+						<div class="flex min-h-28 flex-col justify-between gap-6">
+							<h2 class="truncate text-lg font-semibold text-zinc-950">{ board.Title }</h2>
+							<p class="text-sm tabular-nums text-zinc-500">Board #{ idString(board.ID) }</p>
+						</div>
+					</a>
+				}
+			</section>
+		}
+	</main>
+}
