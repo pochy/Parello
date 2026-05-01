@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -15,35 +17,127 @@ var (
 )
 
 type Board struct {
-	ID        int64
-	Title     string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID              int64
+	Title           string
+	BackgroundColor string
+	Starred         bool
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 type List struct {
+	ID         int64
+	BoardID    int64
+	Title      string
+	Position   int
+	ArchivedAt sql.NullTime
+	Cards      []Card
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
+type Card struct {
+	ID                 int64
+	ListID             int64
+	Title              string
+	Description        string
+	Position           int
+	DueAt              sql.NullTime
+	CompletedAt        sql.NullTime
+	CoverColor         string
+	ArchivedAt         sql.NullTime
+	Labels             []Label
+	Checklists         []Checklist
+	Comments           []Comment
+	Attachments        []Attachment
+	Activities         []ActivityEvent
+	ChecklistTotal     int
+	ChecklistCompleted int
+	CommentCount       int
+	AttachmentCount    int
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+}
+
+type Label struct {
 	ID        int64
 	BoardID   int64
-	Title     string
+	Name      string
+	Color     string
 	Position  int
-	Cards     []Card
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
 
-type Card struct {
+type Checklist struct {
+	ID             int64
+	CardID         int64
+	Title          string
+	Position       int
+	Items          []ChecklistItem
+	CompletedCount int
+	TotalCount     int
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+type ChecklistItem struct {
 	ID          int64
-	ListID      int64
+	ChecklistID int64
 	Title       string
-	Description string
+	CheckedAt   sql.NullTime
 	Position    int
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }
 
+type Comment struct {
+	ID        int64
+	CardID    int64
+	Body      string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+type Attachment struct {
+	ID        int64
+	CardID    int64
+	Title     string
+	URL       string
+	CreatedAt time.Time
+}
+
+type ActivityEvent struct {
+	ID        int64
+	BoardID   int64
+	CardID    sql.NullInt64
+	EventType string
+	Message   string
+	CreatedAt time.Time
+}
+
+type BoardFilter struct {
+	Query  string
+	Label  int64
+	Due    string
+	Status string
+}
+
+func (f BoardFilter) Active() bool {
+	return f.Query != "" || f.Label > 0 || f.Due != "" || f.Status != ""
+}
+
 type BoardDetail struct {
-	Board Board
-	Lists []List
+	Board  Board
+	Lists  []List
+	Labels []Label
+	Filter BoardFilter
+}
+
+type ArchiveDetail struct {
+	Board  Board
+	Cards  []Card
+	Labels []Label
 }
 
 type Store struct {
@@ -56,9 +150,9 @@ func New(db *sql.DB) *Store {
 
 func (s *Store) ListBoards(ctx context.Context) ([]Board, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, title, created_at, updated_at
+		SELECT id, title, background_color, starred, created_at, updated_at
 		FROM boards
-		ORDER BY updated_at DESC, id DESC`)
+		ORDER BY starred DESC, updated_at DESC, id DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -67,7 +161,7 @@ func (s *Store) ListBoards(ctx context.Context) ([]Board, error) {
 	var boards []Board
 	for rows.Next() {
 		var board Board
-		if err := rows.Scan(&board.ID, &board.Title, &board.CreatedAt, &board.UpdatedAt); err != nil {
+		if err := rows.Scan(&board.ID, &board.Title, &board.BackgroundColor, &board.Starred, &board.CreatedAt, &board.UpdatedAt); err != nil {
 			return nil, err
 		}
 		boards = append(boards, board)
@@ -85,32 +179,31 @@ func (s *Store) CreateBoard(ctx context.Context, title string) (Board, error) {
 	err := s.db.QueryRowContext(ctx, `
 		INSERT INTO boards (title)
 		VALUES ($1)
-		RETURNING id, title, created_at, updated_at`, title).
-		Scan(&board.ID, &board.Title, &board.CreatedAt, &board.UpdatedAt)
+		RETURNING id, title, background_color, starred, created_at, updated_at`, title).
+		Scan(&board.ID, &board.Title, &board.BackgroundColor, &board.Starred, &board.CreatedAt, &board.UpdatedAt)
 	if err != nil {
 		return Board{}, err
 	}
 	return board, nil
 }
 
-func (s *Store) GetBoardDetail(ctx context.Context, boardID int64) (BoardDetail, error) {
-	var detail BoardDetail
-	err := s.db.QueryRowContext(ctx, `
-		SELECT id, title, created_at, updated_at
-		FROM boards
-		WHERE id = $1`, boardID).
-		Scan(&detail.Board.ID, &detail.Board.Title, &detail.Board.CreatedAt, &detail.Board.UpdatedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return BoardDetail{}, ErrNotFound
-	}
+func (s *Store) GetBoardDetail(ctx context.Context, boardID int64, filter BoardFilter) (BoardDetail, error) {
+	board, err := s.getBoard(ctx, boardID)
 	if err != nil {
 		return BoardDetail{}, err
 	}
 
+	labels, err := loadBoardLabels(ctx, s.db, boardID)
+	if err != nil {
+		return BoardDetail{}, err
+	}
+
+	detail := BoardDetail{Board: board, Labels: labels, Filter: normalizeFilter(filter)}
+
 	listRows, err := s.db.QueryContext(ctx, `
-		SELECT id, board_id, title, position, created_at, updated_at
+		SELECT id, board_id, title, position, archived_at, created_at, updated_at
 		FROM lists
-		WHERE board_id = $1
+		WHERE board_id = $1 AND archived_at IS NULL
 		ORDER BY position ASC, id ASC`, boardID)
 	if err != nil {
 		return BoardDetail{}, err
@@ -120,7 +213,7 @@ func (s *Store) GetBoardDetail(ctx context.Context, boardID int64) (BoardDetail,
 	listIndex := make(map[int64]int)
 	for listRows.Next() {
 		var list List
-		if err := listRows.Scan(&list.ID, &list.BoardID, &list.Title, &list.Position, &list.CreatedAt, &list.UpdatedAt); err != nil {
+		if err := listRows.Scan(&list.ID, &list.BoardID, &list.Title, &list.Position, &list.ArchivedAt, &list.CreatedAt, &list.UpdatedAt); err != nil {
 			return BoardDetail{}, err
 		}
 		listIndex[list.ID] = len(detail.Lists)
@@ -130,20 +223,16 @@ func (s *Store) GetBoardDetail(ctx context.Context, boardID int64) (BoardDetail,
 		return BoardDetail{}, err
 	}
 
-	cardRows, err := s.db.QueryContext(ctx, `
-		SELECT c.id, c.list_id, c.title, c.description, c.position, c.created_at, c.updated_at
-		FROM cards c
-		JOIN lists l ON l.id = c.list_id
-		WHERE l.board_id = $1
-		ORDER BY l.position ASC, l.id ASC, c.position ASC, c.id ASC`, boardID)
+	query, args := boardCardsQuery(boardID, detail.Filter, false)
+	cardRows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return BoardDetail{}, err
 	}
 	defer cardRows.Close()
 
 	for cardRows.Next() {
-		var card Card
-		if err := cardRows.Scan(&card.ID, &card.ListID, &card.Title, &card.Description, &card.Position, &card.CreatedAt, &card.UpdatedAt); err != nil {
+		card, err := scanCard(cardRows)
+		if err != nil {
 			return BoardDetail{}, err
 		}
 		if idx, ok := listIndex[card.ListID]; ok {
@@ -154,6 +243,49 @@ func (s *Store) GetBoardDetail(ctx context.Context, boardID int64) (BoardDetail,
 		return BoardDetail{}, err
 	}
 
+	cardIndex := cardIndexForLists(detail.Lists)
+	if err := loadCardDecorations(ctx, s.db, boardID, cardIndex); err != nil {
+		return BoardDetail{}, err
+	}
+	return detail, nil
+}
+
+func (s *Store) GetArchiveDetail(ctx context.Context, boardID int64) (ArchiveDetail, error) {
+	board, err := s.getBoard(ctx, boardID)
+	if err != nil {
+		return ArchiveDetail{}, err
+	}
+	labels, err := loadBoardLabels(ctx, s.db, boardID)
+	if err != nil {
+		return ArchiveDetail{}, err
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT c.id, c.list_id, c.title, c.description, c.position, c.due_at, c.completed_at, c.cover_color, c.archived_at, c.created_at, c.updated_at
+		FROM cards c
+		JOIN lists l ON l.id = c.list_id
+		WHERE l.board_id = $1 AND c.archived_at IS NOT NULL
+		ORDER BY c.archived_at DESC, c.id DESC`, boardID)
+	if err != nil {
+		return ArchiveDetail{}, err
+	}
+	defer rows.Close()
+
+	detail := ArchiveDetail{Board: board, Labels: labels}
+	for rows.Next() {
+		card, err := scanCard(rows)
+		if err != nil {
+			return ArchiveDetail{}, err
+		}
+		detail.Cards = append(detail.Cards, card)
+	}
+	if err := rows.Err(); err != nil {
+		return ArchiveDetail{}, err
+	}
+	cardIndex := cardIndexForCards(detail.Cards)
+	if err := loadCardDecorations(ctx, s.db, boardID, cardIndex); err != nil {
+		return ArchiveDetail{}, err
+	}
 	return detail, nil
 }
 
@@ -203,10 +335,10 @@ func (s *Store) CreateList(ctx context.Context, boardID int64, title string) (Li
 		VALUES ($1, $2, (
 			SELECT COALESCE(MAX(position), 0) + 1
 			FROM lists
-			WHERE board_id = $1
+			WHERE board_id = $1 AND archived_at IS NULL
 		))
-		RETURNING id, board_id, title, position, created_at, updated_at`, boardID, title).
-		Scan(&list.ID, &list.BoardID, &list.Title, &list.Position, &list.CreatedAt, &list.UpdatedAt)
+		RETURNING id, board_id, title, position, archived_at, created_at, updated_at`, boardID, title).
+		Scan(&list.ID, &list.BoardID, &list.Title, &list.Position, &list.ArchivedAt, &list.CreatedAt, &list.UpdatedAt)
 	if err != nil {
 		return List{}, err
 	}
@@ -280,7 +412,8 @@ func (s *Store) CreateCard(ctx context.Context, listID int64, title string) (Car
 	}
 	defer rollback(tx)
 
-	if _, err := boardIDForListTx(ctx, tx, listID); err != nil {
+	boardID, err := boardIDForListTx(ctx, tx, listID)
+	if err != nil {
 		return Card{}, err
 	}
 
@@ -290,11 +423,14 @@ func (s *Store) CreateCard(ctx context.Context, listID int64, title string) (Car
 		VALUES ($1, $2, (
 			SELECT COALESCE(MAX(position), 0) + 1
 			FROM cards
-			WHERE list_id = $1
+			WHERE list_id = $1 AND archived_at IS NULL
 		))
-		RETURNING id, list_id, title, description, position, created_at, updated_at`, listID, title).
-		Scan(&card.ID, &card.ListID, &card.Title, &card.Description, &card.Position, &card.CreatedAt, &card.UpdatedAt)
+		RETURNING id, list_id, title, description, position, due_at, completed_at, cover_color, archived_at, created_at, updated_at`, listID, title).
+		Scan(&card.ID, &card.ListID, &card.Title, &card.Description, &card.Position, &card.DueAt, &card.CompletedAt, &card.CoverColor, &card.ArchivedAt, &card.CreatedAt, &card.UpdatedAt)
 	if err != nil {
+		return Card{}, err
+	}
+	if err := recordActivityTx(ctx, tx, boardID, card.ID, "card_created", "カードを作成しました"); err != nil {
 		return Card{}, err
 	}
 
@@ -335,6 +471,157 @@ func (s *Store) UpdateCard(ctx context.Context, cardID int64, title string, desc
 	if err != nil {
 		return 0, err
 	}
+	if err := recordActivityTx(ctx, tx, boardID, cardID, "card_updated", "カード本文を更新しました"); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return boardID, nil
+}
+
+func (s *Store) UpdateCardDates(ctx context.Context, cardID int64, dueAt sql.NullTime, coverColor string) (int64, error) {
+	coverColor = cleanColor(coverColor)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer rollback(tx)
+
+	listID, err := listIDForCardTx(ctx, tx, cardID)
+	if err != nil {
+		return 0, err
+	}
+	boardID, err := boardIDForListTx(ctx, tx, listID)
+	if err != nil {
+		return 0, err
+	}
+	_, err = tx.ExecContext(ctx, `
+		UPDATE cards
+		SET due_at = $2, cover_color = $3, updated_at = now()
+		WHERE id = $1`, cardID, nullableTimeArg(dueAt), coverColor)
+	if err != nil {
+		return 0, err
+	}
+	if err := recordActivityTx(ctx, tx, boardID, cardID, "card_dates_updated", "期限とカバーを更新しました"); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return boardID, nil
+}
+
+func (s *Store) SetCardComplete(ctx context.Context, cardID int64, complete bool) (int64, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer rollback(tx)
+
+	listID, err := listIDForCardTx(ctx, tx, cardID)
+	if err != nil {
+		return 0, err
+	}
+	boardID, err := boardIDForListTx(ctx, tx, listID)
+	if err != nil {
+		return 0, err
+	}
+	var completedAt any
+	message := "カードを未完了に戻しました"
+	if complete {
+		completedAt = time.Now()
+		message = "カードを完了にしました"
+	}
+	_, err = tx.ExecContext(ctx, `
+		UPDATE cards
+		SET completed_at = $2, updated_at = now()
+		WHERE id = $1`, cardID, completedAt)
+	if err != nil {
+		return 0, err
+	}
+	if err := recordActivityTx(ctx, tx, boardID, cardID, "card_completed", message); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return boardID, nil
+}
+
+func (s *Store) ArchiveCard(ctx context.Context, cardID int64) (int64, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer rollback(tx)
+
+	listID, err := listIDForCardTx(ctx, tx, cardID)
+	if err != nil {
+		return 0, err
+	}
+	boardID, err := boardIDForListTx(ctx, tx, listID)
+	if err != nil {
+		return 0, err
+	}
+	result, err := tx.ExecContext(ctx, `
+		UPDATE cards
+		SET archived_at = now(), updated_at = now()
+		WHERE id = $1 AND archived_at IS NULL`, cardID)
+	if err != nil {
+		return 0, err
+	}
+	if err := ensureAffected(result); err != nil {
+		return 0, err
+	}
+	if err := normalizeCardsTx(ctx, tx, listID); err != nil {
+		return 0, err
+	}
+	if err := recordActivityTx(ctx, tx, boardID, cardID, "card_archived", "カードをアーカイブしました"); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return boardID, nil
+}
+
+func (s *Store) RestoreCard(ctx context.Context, cardID int64) (int64, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer rollback(tx)
+
+	listID, err := listIDForCardTx(ctx, tx, cardID)
+	if err != nil {
+		return 0, err
+	}
+	boardID, err := boardIDForListTx(ctx, tx, listID)
+	if err != nil {
+		return 0, err
+	}
+	var nextPosition int
+	err = tx.QueryRowContext(ctx, `
+		SELECT COALESCE(MAX(position), 0) + 1
+		FROM cards
+		WHERE list_id = $1 AND archived_at IS NULL`, listID).Scan(&nextPosition)
+	if err != nil {
+		return 0, err
+	}
+	result, err := tx.ExecContext(ctx, `
+		UPDATE cards
+		SET archived_at = NULL, position = $2, updated_at = now()
+		WHERE id = $1 AND archived_at IS NOT NULL`, cardID, nextPosition)
+	if err != nil {
+		return 0, err
+	}
+	if err := ensureAffected(result); err != nil {
+		return 0, err
+	}
+	if err := recordActivityTx(ctx, tx, boardID, cardID, "card_restored", "カードを復元しました"); err != nil {
+		return 0, err
+	}
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
@@ -372,6 +659,269 @@ func (s *Store) DeleteCard(ctx context.Context, cardID int64) (int64, error) {
 		return 0, err
 	}
 	return boardID, nil
+}
+
+func (s *Store) CreateLabel(ctx context.Context, boardID int64, name string, color string) error {
+	name = cleanTitle(name)
+	color = cleanColor(color)
+	if name == "" || color == "" {
+		return ErrInvalidInput
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer rollback(tx)
+
+	if err := ensureBoardExists(ctx, tx, boardID); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO labels (board_id, name, color, position)
+		VALUES ($1, $2, $3, (
+			SELECT COALESCE(MAX(position), 0) + 1
+			FROM labels
+			WHERE board_id = $1
+		))`, boardID, name, color)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) SetCardLabels(ctx context.Context, cardID int64, labelIDs []int64) (int64, error) {
+	if hasDuplicates(labelIDs) {
+		return 0, ErrInvalidInput
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer rollback(tx)
+
+	listID, err := listIDForCardTx(ctx, tx, cardID)
+	if err != nil {
+		return 0, err
+	}
+	boardID, err := boardIDForListTx(ctx, tx, listID)
+	if err != nil {
+		return 0, err
+	}
+	for _, labelID := range labelIDs {
+		if err := ensureLabelBelongsToBoard(ctx, tx, boardID, labelID); err != nil {
+			return 0, err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM card_labels WHERE card_id = $1`, cardID); err != nil {
+		return 0, err
+	}
+	for _, labelID := range labelIDs {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO card_labels (card_id, label_id) VALUES ($1, $2)`, cardID, labelID); err != nil {
+			return 0, err
+		}
+	}
+	if err := recordActivityTx(ctx, tx, boardID, cardID, "card_labels_updated", "ラベルを更新しました"); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return boardID, nil
+}
+
+func (s *Store) AddComment(ctx context.Context, cardID int64, body string) (int64, error) {
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return 0, ErrInvalidInput
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer rollback(tx)
+
+	listID, err := listIDForCardTx(ctx, tx, cardID)
+	if err != nil {
+		return 0, err
+	}
+	boardID, err := boardIDForListTx(ctx, tx, listID)
+	if err != nil {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO comments (card_id, body) VALUES ($1, $2)`, cardID, body); err != nil {
+		return 0, err
+	}
+	if err := recordActivityTx(ctx, tx, boardID, cardID, "comment_added", "コメントを追加しました"); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return boardID, nil
+}
+
+func (s *Store) AddAttachment(ctx context.Context, cardID int64, title string, rawURL string) (int64, error) {
+	title = cleanTitle(title)
+	rawURL = strings.TrimSpace(rawURL)
+	if title == "" || rawURL == "" {
+		return 0, ErrInvalidInput
+	}
+	parsedURL, err := url.ParseRequestURI(rawURL)
+	if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
+		return 0, ErrInvalidInput
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer rollback(tx)
+
+	listID, err := listIDForCardTx(ctx, tx, cardID)
+	if err != nil {
+		return 0, err
+	}
+	boardID, err := boardIDForListTx(ctx, tx, listID)
+	if err != nil {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO attachments (card_id, title, url) VALUES ($1, $2, $3)`, cardID, title, rawURL); err != nil {
+		return 0, err
+	}
+	if err := recordActivityTx(ctx, tx, boardID, cardID, "attachment_added", "添付リンクを追加しました"); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return boardID, nil
+}
+
+func (s *Store) CreateChecklist(ctx context.Context, cardID int64, title string) (int64, error) {
+	title = cleanTitle(title)
+	if title == "" {
+		return 0, ErrInvalidInput
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer rollback(tx)
+
+	listID, err := listIDForCardTx(ctx, tx, cardID)
+	if err != nil {
+		return 0, err
+	}
+	boardID, err := boardIDForListTx(ctx, tx, listID)
+	if err != nil {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO checklists (card_id, title, position)
+		VALUES ($1, $2, (
+			SELECT COALESCE(MAX(position), 0) + 1
+			FROM checklists
+			WHERE card_id = $1
+		))`, cardID, title); err != nil {
+		return 0, err
+	}
+	if err := recordActivityTx(ctx, tx, boardID, cardID, "checklist_added", "チェックリストを追加しました"); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return boardID, nil
+}
+
+func (s *Store) CreateChecklistItem(ctx context.Context, checklistID int64, title string) (int64, error) {
+	title = cleanTitle(title)
+	if title == "" {
+		return 0, ErrInvalidInput
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer rollback(tx)
+
+	cardID, err := cardIDForChecklistTx(ctx, tx, checklistID)
+	if err != nil {
+		return 0, err
+	}
+	listID, err := listIDForCardTx(ctx, tx, cardID)
+	if err != nil {
+		return 0, err
+	}
+	boardID, err := boardIDForListTx(ctx, tx, listID)
+	if err != nil {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO checklist_items (checklist_id, title, position)
+		VALUES ($1, $2, (
+			SELECT COALESCE(MAX(position), 0) + 1
+			FROM checklist_items
+			WHERE checklist_id = $1
+		))`, checklistID, title); err != nil {
+		return 0, err
+	}
+	if err := recordActivityTx(ctx, tx, boardID, cardID, "checklist_item_added", "チェック項目を追加しました"); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return boardID, nil
+}
+
+func (s *Store) ToggleChecklistItem(ctx context.Context, itemID int64, checked bool) (int64, bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, false, err
+	}
+	defer rollback(tx)
+
+	cardID, err := cardIDForChecklistItemTx(ctx, tx, itemID)
+	if err != nil {
+		return 0, false, err
+	}
+	listID, err := listIDForCardTx(ctx, tx, cardID)
+	if err != nil {
+		return 0, false, err
+	}
+	boardID, err := boardIDForListTx(ctx, tx, listID)
+	if err != nil {
+		return 0, false, err
+	}
+	var checkedAt any
+	message := "チェック項目を未完了にしました"
+	if checked {
+		checkedAt = time.Now()
+		message = "チェック項目を完了にしました"
+	}
+	result, err := tx.ExecContext(ctx, `
+		UPDATE checklist_items
+		SET checked_at = $2, updated_at = now()
+		WHERE id = $1`, itemID, checkedAt)
+	if err != nil {
+		return 0, false, err
+	}
+	if err := ensureAffected(result); err != nil {
+		return 0, false, err
+	}
+	if err := recordActivityTx(ctx, tx, boardID, cardID, "checklist_item_toggled", message); err != nil {
+		return 0, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, false, err
+	}
+	return boardID, checked, nil
 }
 
 func (s *Store) BoardIDForList(ctx context.Context, listID int64) (int64, error) {
@@ -421,7 +971,7 @@ func (s *Store) ReorderLists(ctx context.Context, boardID int64, listIDs []int64
 		result, err := tx.ExecContext(ctx, `
 			UPDATE lists
 			SET position = $3, updated_at = now()
-			WHERE id = $1 AND board_id = $2`, listID, boardID, idx+1)
+			WHERE id = $1 AND board_id = $2 AND archived_at IS NULL`, listID, boardID, idx+1)
 		if err != nil {
 			return err
 		}
@@ -444,7 +994,8 @@ func (s *Store) ReorderCards(ctx context.Context, toListID int64, cardIDs []int6
 	}
 	defer rollback(tx)
 
-	if _, err := boardIDForListTx(ctx, tx, toListID); err != nil {
+	boardID, err := boardIDForListTx(ctx, tx, toListID)
+	if err != nil {
 		return err
 	}
 
@@ -487,11 +1038,14 @@ func (s *Store) ReorderCards(ctx context.Context, toListID int64, cardIDs []int6
 		result, err := tx.ExecContext(ctx, `
 			UPDATE cards
 			SET list_id = $1, position = $2, updated_at = now()
-			WHERE id = $3`, toListID, idx+1, cardID)
+			WHERE id = $3 AND archived_at IS NULL`, toListID, idx+1, cardID)
 		if err != nil {
 			return err
 		}
 		if err := ensureAffected(result); err != nil {
+			return err
+		}
+		if err := recordActivityTx(ctx, tx, boardID, cardID, "card_moved", "カードを移動しました"); err != nil {
 			return err
 		}
 	}
@@ -505,12 +1059,366 @@ func (s *Store) ReorderCards(ctx context.Context, toListID int64, cardIDs []int6
 	return tx.Commit()
 }
 
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
 type queryer interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
+type queryExecutor interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func (s *Store) getBoard(ctx context.Context, boardID int64) (Board, error) {
+	var board Board
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, title, background_color, starred, created_at, updated_at
+		FROM boards
+		WHERE id = $1`, boardID).
+		Scan(&board.ID, &board.Title, &board.BackgroundColor, &board.Starred, &board.CreatedAt, &board.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Board{}, ErrNotFound
+	}
+	if err != nil {
+		return Board{}, err
+	}
+	return board, nil
+}
+
+func scanCard(scanner rowScanner) (Card, error) {
+	var card Card
+	err := scanner.Scan(&card.ID, &card.ListID, &card.Title, &card.Description, &card.Position, &card.DueAt, &card.CompletedAt, &card.CoverColor, &card.ArchivedAt, &card.CreatedAt, &card.UpdatedAt)
+	return card, err
+}
+
+func normalizeFilter(filter BoardFilter) BoardFilter {
+	filter.Query = strings.TrimSpace(filter.Query)
+	switch filter.Due {
+	case "overdue", "today", "week", "none":
+	default:
+		filter.Due = ""
+	}
+	switch filter.Status {
+	case "complete", "incomplete":
+	default:
+		filter.Status = ""
+	}
+	if filter.Label < 0 {
+		filter.Label = 0
+	}
+	return filter
+}
+
+func boardCardsQuery(boardID int64, filter BoardFilter, archived bool) (string, []any) {
+	args := []any{boardID}
+	where := []string{"l.board_id = $1"}
+	if archived {
+		where = append(where, "c.archived_at IS NOT NULL")
+	} else {
+		where = append(where, "l.archived_at IS NULL", "c.archived_at IS NULL")
+	}
+
+	if filter.Query != "" {
+		args = append(args, "%"+filter.Query+"%")
+		where = append(where, "(c.title ILIKE $"+placeholder(len(args))+" OR c.description ILIKE $"+placeholder(len(args))+")")
+	}
+	if filter.Label > 0 {
+		args = append(args, filter.Label)
+		where = append(where, "EXISTS (SELECT 1 FROM card_labels cl WHERE cl.card_id = c.id AND cl.label_id = $"+placeholder(len(args))+")")
+	}
+	switch filter.Due {
+	case "overdue":
+		where = append(where, "c.due_at IS NOT NULL AND c.due_at < now() AND c.completed_at IS NULL")
+	case "today":
+		where = append(where, "c.due_at IS NOT NULL AND c.due_at >= date_trunc('day', now()) AND c.due_at < date_trunc('day', now()) + interval '1 day'")
+	case "week":
+		where = append(where, "c.due_at IS NOT NULL AND c.due_at >= now() AND c.due_at < now() + interval '7 days'")
+	case "none":
+		where = append(where, "c.due_at IS NULL")
+	}
+	switch filter.Status {
+	case "complete":
+		where = append(where, "c.completed_at IS NOT NULL")
+	case "incomplete":
+		where = append(where, "c.completed_at IS NULL")
+	}
+
+	query := `
+		SELECT c.id, c.list_id, c.title, c.description, c.position, c.due_at, c.completed_at, c.cover_color, c.archived_at, c.created_at, c.updated_at
+		FROM cards c
+		JOIN lists l ON l.id = c.list_id
+		WHERE ` + strings.Join(where, " AND ") + `
+		ORDER BY l.position ASC, l.id ASC, c.position ASC, c.id ASC`
+	return query, args
+}
+
+func placeholder(n int) string {
+	return strconv.Itoa(n)
+}
+
+func loadBoardLabels(ctx context.Context, q queryExecutor, boardID int64) ([]Label, error) {
+	rows, err := q.QueryContext(ctx, `
+		SELECT id, board_id, name, color, position, created_at, updated_at
+		FROM labels
+		WHERE board_id = $1
+		ORDER BY position ASC, id ASC`, boardID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var labels []Label
+	for rows.Next() {
+		var label Label
+		if err := rows.Scan(&label.ID, &label.BoardID, &label.Name, &label.Color, &label.Position, &label.CreatedAt, &label.UpdatedAt); err != nil {
+			return nil, err
+		}
+		labels = append(labels, label)
+	}
+	return labels, rows.Err()
+}
+
+func loadCardDecorations(ctx context.Context, q queryExecutor, boardID int64, cards map[int64]*Card) error {
+	if len(cards) == 0 {
+		return nil
+	}
+	if err := loadCardLabels(ctx, q, boardID, cards); err != nil {
+		return err
+	}
+	if err := loadCardChecklists(ctx, q, boardID, cards); err != nil {
+		return err
+	}
+	if err := loadCardComments(ctx, q, boardID, cards); err != nil {
+		return err
+	}
+	if err := loadCardAttachments(ctx, q, boardID, cards); err != nil {
+		return err
+	}
+	return loadCardActivities(ctx, q, boardID, cards)
+}
+
+func loadCardLabels(ctx context.Context, q queryExecutor, boardID int64, cards map[int64]*Card) error {
+	rows, err := q.QueryContext(ctx, `
+		SELECT cl.card_id, l.id, l.board_id, l.name, l.color, l.position, l.created_at, l.updated_at
+		FROM card_labels cl
+		JOIN labels l ON l.id = cl.label_id
+		WHERE l.board_id = $1
+		ORDER BY l.position ASC, l.id ASC`, boardID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cardID int64
+		var label Label
+		if err := rows.Scan(&cardID, &label.ID, &label.BoardID, &label.Name, &label.Color, &label.Position, &label.CreatedAt, &label.UpdatedAt); err != nil {
+			return err
+		}
+		if card, ok := cards[cardID]; ok {
+			card.Labels = append(card.Labels, label)
+		}
+	}
+	return rows.Err()
+}
+
+func loadCardChecklists(ctx context.Context, q queryExecutor, boardID int64, cards map[int64]*Card) error {
+	rows, err := q.QueryContext(ctx, `
+		SELECT ch.id, ch.card_id, ch.title, ch.position, ch.created_at, ch.updated_at
+		FROM checklists ch
+		JOIN cards c ON c.id = ch.card_id
+		JOIN lists l ON l.id = c.list_id
+		WHERE l.board_id = $1
+		ORDER BY ch.position ASC, ch.id ASC`, boardID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	byCard := make(map[int64][]Checklist)
+	for rows.Next() {
+		var checklist Checklist
+		if err := rows.Scan(&checklist.ID, &checklist.CardID, &checklist.Title, &checklist.Position, &checklist.CreatedAt, &checklist.UpdatedAt); err != nil {
+			return err
+		}
+		if _, ok := cards[checklist.CardID]; ok {
+			byCard[checklist.CardID] = append(byCard[checklist.CardID], checklist)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	checklists := make(map[int64]*Checklist)
+	for cardID, items := range byCard {
+		card := cards[cardID]
+		card.Checklists = items
+		for idx := range card.Checklists {
+			checklists[card.Checklists[idx].ID] = &card.Checklists[idx]
+		}
+	}
+
+	itemRows, err := q.QueryContext(ctx, `
+		SELECT ci.id, ci.checklist_id, ci.title, ci.checked_at, ci.position, ci.created_at, ci.updated_at
+		FROM checklist_items ci
+		JOIN checklists ch ON ch.id = ci.checklist_id
+		JOIN cards c ON c.id = ch.card_id
+		JOIN lists l ON l.id = c.list_id
+		WHERE l.board_id = $1
+		ORDER BY ci.position ASC, ci.id ASC`, boardID)
+	if err != nil {
+		return err
+	}
+	defer itemRows.Close()
+
+	for itemRows.Next() {
+		var item ChecklistItem
+		if err := itemRows.Scan(&item.ID, &item.ChecklistID, &item.Title, &item.CheckedAt, &item.Position, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return err
+		}
+		if checklist, ok := checklists[item.ChecklistID]; ok {
+			checklist.Items = append(checklist.Items, item)
+			checklist.TotalCount++
+			card := cards[checklist.CardID]
+			card.ChecklistTotal++
+			if item.CheckedAt.Valid {
+				checklist.CompletedCount++
+				card.ChecklistCompleted++
+			}
+		}
+	}
+	return itemRows.Err()
+}
+
+func loadCardComments(ctx context.Context, q queryExecutor, boardID int64, cards map[int64]*Card) error {
+	rows, err := q.QueryContext(ctx, `
+		SELECT co.id, co.card_id, co.body, co.created_at, co.updated_at
+		FROM comments co
+		JOIN cards c ON c.id = co.card_id
+		JOIN lists l ON l.id = c.list_id
+		WHERE l.board_id = $1
+		ORDER BY co.created_at DESC, co.id DESC`, boardID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var comment Comment
+		if err := rows.Scan(&comment.ID, &comment.CardID, &comment.Body, &comment.CreatedAt, &comment.UpdatedAt); err != nil {
+			return err
+		}
+		if card, ok := cards[comment.CardID]; ok {
+			card.Comments = append(card.Comments, comment)
+			card.CommentCount++
+		}
+	}
+	return rows.Err()
+}
+
+func loadCardAttachments(ctx context.Context, q queryExecutor, boardID int64, cards map[int64]*Card) error {
+	rows, err := q.QueryContext(ctx, `
+		SELECT a.id, a.card_id, a.title, a.url, a.created_at
+		FROM attachments a
+		JOIN cards c ON c.id = a.card_id
+		JOIN lists l ON l.id = c.list_id
+		WHERE l.board_id = $1
+		ORDER BY a.created_at DESC, a.id DESC`, boardID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var attachment Attachment
+		if err := rows.Scan(&attachment.ID, &attachment.CardID, &attachment.Title, &attachment.URL, &attachment.CreatedAt); err != nil {
+			return err
+		}
+		if card, ok := cards[attachment.CardID]; ok {
+			card.Attachments = append(card.Attachments, attachment)
+			card.AttachmentCount++
+		}
+	}
+	return rows.Err()
+}
+
+func loadCardActivities(ctx context.Context, q queryExecutor, boardID int64, cards map[int64]*Card) error {
+	rows, err := q.QueryContext(ctx, `
+		SELECT id, board_id, card_id, event_type, COALESCE(payload->>'message', event_type), created_at
+		FROM activity_events
+		WHERE board_id = $1 AND card_id IS NOT NULL
+		ORDER BY created_at DESC, id DESC`, boardID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var event ActivityEvent
+		if err := rows.Scan(&event.ID, &event.BoardID, &event.CardID, &event.EventType, &event.Message, &event.CreatedAt); err != nil {
+			return err
+		}
+		if event.CardID.Valid {
+			if card, ok := cards[event.CardID.Int64]; ok {
+				card.Activities = append(card.Activities, event)
+			}
+		}
+	}
+	return rows.Err()
+}
+
+func cardIndexForLists(lists []List) map[int64]*Card {
+	cards := make(map[int64]*Card)
+	for listIdx := range lists {
+		for cardIdx := range lists[listIdx].Cards {
+			cards[lists[listIdx].Cards[cardIdx].ID] = &lists[listIdx].Cards[cardIdx]
+		}
+	}
+	return cards
+}
+
+func cardIndexForCards(cardList []Card) map[int64]*Card {
+	cards := make(map[int64]*Card)
+	for idx := range cardList {
+		cards[cardList[idx].ID] = &cardList[idx]
+	}
+	return cards
+}
+
 func cleanTitle(title string) string {
 	return strings.TrimSpace(title)
+}
+
+func cleanColor(color string) string {
+	color = strings.TrimSpace(color)
+	if color == "" {
+		return ""
+	}
+	if _, ok := allowedColors[color]; ok {
+		return color
+	}
+	return ""
+}
+
+var allowedColors = map[string]struct{}{
+	"green":  {},
+	"yellow": {},
+	"orange": {},
+	"red":    {},
+	"blue":   {},
+	"purple": {},
+	"pink":   {},
+	"gray":   {},
+}
+
+func nullableTimeArg(value sql.NullTime) any {
+	if value.Valid {
+		return value.Time
+	}
+	return nil
 }
 
 func ensureAffected(result sql.Result) error {
@@ -529,6 +1437,15 @@ func ensureBoardExists(ctx context.Context, tx *sql.Tx, boardID int64) error {
 	err := tx.QueryRowContext(ctx, `SELECT id FROM boards WHERE id = $1`, boardID).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
+	}
+	return err
+}
+
+func ensureLabelBelongsToBoard(ctx context.Context, tx *sql.Tx, boardID int64, labelID int64) error {
+	var id int64
+	err := tx.QueryRowContext(ctx, `SELECT id FROM labels WHERE id = $1 AND board_id = $2`, labelID, boardID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrInvalidInput
 	}
 	return err
 }
@@ -561,11 +1478,39 @@ func listIDForCardTx(ctx context.Context, tx *sql.Tx, cardID int64) (int64, erro
 	return listID, nil
 }
 
+func cardIDForChecklistTx(ctx context.Context, tx *sql.Tx, checklistID int64) (int64, error) {
+	var cardID int64
+	err := tx.QueryRowContext(ctx, `SELECT card_id FROM checklists WHERE id = $1`, checklistID).Scan(&cardID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	if err != nil {
+		return 0, err
+	}
+	return cardID, nil
+}
+
+func cardIDForChecklistItemTx(ctx context.Context, tx *sql.Tx, itemID int64) (int64, error) {
+	var cardID int64
+	err := tx.QueryRowContext(ctx, `
+		SELECT ch.card_id
+		FROM checklist_items ci
+		JOIN checklists ch ON ch.id = ci.checklist_id
+		WHERE ci.id = $1`, itemID).Scan(&cardID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	if err != nil {
+		return 0, err
+	}
+	return cardID, nil
+}
+
 func listIDsForBoardTx(ctx context.Context, tx *sql.Tx, boardID int64) ([]int64, error) {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id
 		FROM lists
-		WHERE board_id = $1
+		WHERE board_id = $1 AND archived_at IS NULL
 		ORDER BY position ASC, id ASC`, boardID)
 	if err != nil {
 		return nil, err
@@ -587,7 +1532,7 @@ func cardIDsForListTx(ctx context.Context, tx *sql.Tx, listID int64) ([]int64, e
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id
 		FROM cards
-		WHERE list_id = $1
+		WHERE list_id = $1 AND archived_at IS NULL
 		ORDER BY position ASC, id ASC`, listID)
 	if err != nil {
 		return nil, err
@@ -610,7 +1555,7 @@ func normalizeListsTx(ctx context.Context, tx *sql.Tx, boardID int64) error {
 		WITH ranked AS (
 			SELECT id, row_number() OVER (ORDER BY position ASC, id ASC)::integer AS new_position
 			FROM lists
-			WHERE board_id = $1
+			WHERE board_id = $1 AND archived_at IS NULL
 		)
 		UPDATE lists l
 		SET position = ranked.new_position, updated_at = now()
@@ -624,12 +1569,19 @@ func normalizeCardsTx(ctx context.Context, tx *sql.Tx, listID int64) error {
 		WITH ranked AS (
 			SELECT id, row_number() OVER (ORDER BY position ASC, id ASC)::integer AS new_position
 			FROM cards
-			WHERE list_id = $1
+			WHERE list_id = $1 AND archived_at IS NULL
 		)
 		UPDATE cards c
 		SET position = ranked.new_position, updated_at = now()
 		FROM ranked
 		WHERE c.id = ranked.id`, listID)
+	return err
+}
+
+func recordActivityTx(ctx context.Context, tx *sql.Tx, boardID int64, cardID int64, eventType string, message string) error {
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO activity_events (board_id, card_id, event_type, payload)
+		VALUES ($1, $2, $3, jsonb_build_object('message', $4::text))`, boardID, cardID, eventType, message)
 	return err
 }
 
