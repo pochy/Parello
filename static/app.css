@@ -1,0 +1,11 @@
+[x-cloak] {
+	display: none !important;
+}
+
+.sortable-ghost {
+	opacity: .55 !important;
+}
+
+body.sorting .card-hover {
+	pointer-events: none;
+}

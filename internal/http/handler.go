@@ -55,6 +55,7 @@ func New(data DataStore) http.Handler {
 	app := &App{store: data}
 	mux := http.NewServeMux()
 
+	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
 	mux.HandleFunc("GET /", app.redirectRoot)
 	mux.HandleFunc("GET /boards", app.boardsIndex)
 	mux.HandleFunc("POST /boards", app.createBoard)

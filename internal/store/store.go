@@ -967,17 +967,19 @@ func (s *Store) ReorderLists(ctx context.Context, boardID int64, listIDs []int64
 		return ErrInvalidOrder
 	}
 
-	for idx, listID := range listIDs {
-		result, err := tx.ExecContext(ctx, `
-			UPDATE lists
-			SET position = $3, updated_at = now()
-			WHERE id = $1 AND board_id = $2 AND archived_at IS NULL`, listID, boardID, idx+1)
-		if err != nil {
-			return err
-		}
-		if err := ensureAffected(result); err != nil {
-			return err
-		}
+	tempPositions, err := temporaryListPositionsTx(ctx, tx, boardID, len(listIDs))
+	if err != nil {
+		return err
+	}
+	if err := setListPositionsTx(ctx, tx, boardID, listIDs, tempPositions); err != nil {
+		return err
+	}
+	finalPositions, err := activeListPositionsTx(ctx, tx, boardID, len(listIDs))
+	if err != nil {
+		return err
+	}
+	if err := setListPositionsTx(ctx, tx, boardID, listIDs, finalPositions); err != nil {
+		return err
 	}
 
 	return tx.Commit()
@@ -1002,6 +1004,9 @@ func (s *Store) ReorderCards(ctx context.Context, toListID int64, cardIDs []int6
 	currentDestIDs, err := cardIDsForListTx(ctx, tx, toListID)
 	if err != nil {
 		return err
+	}
+	if isStrictSubset(cardIDs, currentDestIDs) {
+		return tx.Commit()
 	}
 
 	oldListIDs := make(map[int64]struct{})
@@ -1034,17 +1039,22 @@ func (s *Store) ReorderCards(ctx context.Context, toListID int64, cardIDs []int6
 		}
 	}
 
-	for idx, cardID := range cardIDs {
-		result, err := tx.ExecContext(ctx, `
-			UPDATE cards
-			SET list_id = $1, position = $2, updated_at = now()
-			WHERE id = $3 AND archived_at IS NULL`, toListID, idx+1, cardID)
-		if err != nil {
-			return err
-		}
-		if err := ensureAffected(result); err != nil {
-			return err
-		}
+	tempPositions, err := temporaryCardPositionsTx(ctx, tx, toListID, len(cardIDs))
+	if err != nil {
+		return err
+	}
+	if err := setCardPositionsTx(ctx, tx, toListID, cardIDs, tempPositions); err != nil {
+		return err
+	}
+	finalPositions, err := activeCardPositionsTx(ctx, tx, toListID, len(cardIDs))
+	if err != nil {
+		return err
+	}
+	if err := setCardPositionsTx(ctx, tx, toListID, cardIDs, finalPositions); err != nil {
+		return err
+	}
+
+	for _, cardID := range cardIDs {
 		if err := recordActivityTx(ctx, tx, boardID, cardID, "card_moved", "カードを移動しました"); err != nil {
 			return err
 		}
@@ -1057,6 +1067,45 @@ func (s *Store) ReorderCards(ctx context.Context, toListID int64, cardIDs []int6
 	}
 
 	return tx.Commit()
+}
+
+func setListPositionsTx(ctx context.Context, tx *sql.Tx, boardID int64, listIDs []int64, positions []int) error {
+	if len(listIDs) != len(positions) {
+		return ErrInvalidOrder
+	}
+	for idx, listID := range listIDs {
+		result, err := tx.ExecContext(ctx, `
+			UPDATE lists
+			SET position = $3, updated_at = now()
+			WHERE id = $1 AND board_id = $2 AND archived_at IS NULL`, listID, boardID, positions[idx])
+		if err != nil {
+			return err
+		}
+		if err := ensureAffected(result); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func setCardPositionsTx(ctx context.Context, tx *sql.Tx, listID int64, cardIDs []int64, positions []int) error {
+	if len(cardIDs) != len(positions) {
+		return ErrInvalidOrder
+	}
+	for idx, cardID := range cardIDs {
+		result, err := tx.ExecContext(ctx, `
+			UPDATE cards
+			SET list_id = $1, position = $2, updated_at = now()
+			WHERE id = $3 AND archived_at IS NULL`, listID, positions[idx], cardID)
+		if err != nil {
+			return err
+		}
+		if err := ensureAffected(result); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type rowScanner interface {
@@ -1550,32 +1599,149 @@ func cardIDsForListTx(ctx context.Context, tx *sql.Tx, listID int64) ([]int64, e
 	return ids, rows.Err()
 }
 
+func temporaryListPositionsTx(ctx context.Context, tx *sql.Tx, boardID int64, count int) ([]int, error) {
+	if count == 0 {
+		return nil, nil
+	}
+	var start int
+	err := tx.QueryRowContext(ctx, `
+		SELECT COALESCE(MAX(position), 0) + 1
+		FROM lists
+		WHERE board_id = $1`, boardID).Scan(&start)
+	if err != nil {
+		return nil, err
+	}
+	return consecutivePositions(start, count), nil
+}
+
+func activeListPositionsTx(ctx context.Context, tx *sql.Tx, boardID int64, count int) ([]int, error) {
+	occupied, err := archivedListPositionsTx(ctx, tx, boardID)
+	if err != nil {
+		return nil, err
+	}
+	return nextAvailablePositions(occupied, count), nil
+}
+
+func archivedListPositionsTx(ctx context.Context, tx *sql.Tx, boardID int64) (map[int]struct{}, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT position
+		FROM lists
+		WHERE board_id = $1 AND archived_at IS NOT NULL`, boardID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	positions := map[int]struct{}{}
+	for rows.Next() {
+		var position int
+		if err := rows.Scan(&position); err != nil {
+			return nil, err
+		}
+		positions[position] = struct{}{}
+	}
+	return positions, rows.Err()
+}
+
+func temporaryCardPositionsTx(ctx context.Context, tx *sql.Tx, listID int64, count int) ([]int, error) {
+	if count == 0 {
+		return nil, nil
+	}
+	var start int
+	err := tx.QueryRowContext(ctx, `
+		SELECT COALESCE(MAX(position), 0) + 1
+		FROM cards
+		WHERE list_id = $1`, listID).Scan(&start)
+	if err != nil {
+		return nil, err
+	}
+	return consecutivePositions(start, count), nil
+}
+
+func activeCardPositionsTx(ctx context.Context, tx *sql.Tx, listID int64, count int) ([]int, error) {
+	occupied, err := archivedCardPositionsTx(ctx, tx, listID)
+	if err != nil {
+		return nil, err
+	}
+	return nextAvailablePositions(occupied, count), nil
+}
+
+func archivedCardPositionsTx(ctx context.Context, tx *sql.Tx, listID int64) (map[int]struct{}, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT position
+		FROM cards
+		WHERE list_id = $1 AND archived_at IS NOT NULL`, listID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	positions := map[int]struct{}{}
+	for rows.Next() {
+		var position int
+		if err := rows.Scan(&position); err != nil {
+			return nil, err
+		}
+		positions[position] = struct{}{}
+	}
+	return positions, rows.Err()
+}
+
+func consecutivePositions(start int, count int) []int {
+	positions := make([]int, count)
+	for idx := range positions {
+		positions[idx] = start + idx
+	}
+	return positions
+}
+
+func nextAvailablePositions(occupied map[int]struct{}, count int) []int {
+	positions := make([]int, 0, count)
+	for position := 1; len(positions) < count; position++ {
+		if _, ok := occupied[position]; ok {
+			continue
+		}
+		positions = append(positions, position)
+	}
+	return positions
+}
+
 func normalizeListsTx(ctx context.Context, tx *sql.Tx, boardID int64) error {
-	_, err := tx.ExecContext(ctx, `
-		WITH ranked AS (
-			SELECT id, row_number() OVER (ORDER BY position ASC, id ASC)::integer AS new_position
-			FROM lists
-			WHERE board_id = $1 AND archived_at IS NULL
-		)
-		UPDATE lists l
-		SET position = ranked.new_position, updated_at = now()
-		FROM ranked
-		WHERE l.id = ranked.id`, boardID)
-	return err
+	listIDs, err := listIDsForBoardTx(ctx, tx, boardID)
+	if err != nil {
+		return err
+	}
+	tempPositions, err := temporaryListPositionsTx(ctx, tx, boardID, len(listIDs))
+	if err != nil {
+		return err
+	}
+	if err := setListPositionsTx(ctx, tx, boardID, listIDs, tempPositions); err != nil {
+		return err
+	}
+	finalPositions, err := activeListPositionsTx(ctx, tx, boardID, len(listIDs))
+	if err != nil {
+		return err
+	}
+	return setListPositionsTx(ctx, tx, boardID, listIDs, finalPositions)
 }
 
 func normalizeCardsTx(ctx context.Context, tx *sql.Tx, listID int64) error {
-	_, err := tx.ExecContext(ctx, `
-		WITH ranked AS (
-			SELECT id, row_number() OVER (ORDER BY position ASC, id ASC)::integer AS new_position
-			FROM cards
-			WHERE list_id = $1 AND archived_at IS NULL
-		)
-		UPDATE cards c
-		SET position = ranked.new_position, updated_at = now()
-		FROM ranked
-		WHERE c.id = ranked.id`, listID)
-	return err
+	cardIDs, err := cardIDsForListTx(ctx, tx, listID)
+	if err != nil {
+		return err
+	}
+	tempPositions, err := temporaryCardPositionsTx(ctx, tx, listID, len(cardIDs))
+	if err != nil {
+		return err
+	}
+	if err := setCardPositionsTx(ctx, tx, listID, cardIDs, tempPositions); err != nil {
+		return err
+	}
+	finalPositions, err := activeCardPositionsTx(ctx, tx, listID, len(cardIDs))
+	if err != nil {
+		return err
+	}
+	return setCardPositionsTx(ctx, tx, listID, cardIDs, finalPositions)
 }
 
 func recordActivityTx(ctx context.Context, tx *sql.Tx, boardID int64, cardID int64, eventType string, message string) error {
@@ -1612,6 +1778,22 @@ func sameSet(left []int64, right []int64) bool {
 	}
 	for _, count := range seen {
 		if count != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func isStrictSubset(subset []int64, set []int64) bool {
+	if len(subset) >= len(set) {
+		return false
+	}
+	seen := make(map[int64]struct{}, len(set))
+	for _, id := range set {
+		seen[id] = struct{}{}
+	}
+	for _, id := range subset {
+		if _, ok := seen[id]; !ok {
 			return false
 		}
 	}

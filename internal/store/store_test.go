@@ -59,6 +59,9 @@ func TestStoreLifecycleAndReorder(t *testing.T) {
 	if err := s.ReorderLists(ctx, board.ID, []int64{done.ID, todo.ID}); err != nil {
 		t.Fatalf("reorder lists: %v", err)
 	}
+	if err := s.ReorderCards(ctx, todo.ID, []int64{second.ID}); err != nil {
+		t.Fatalf("ignore source-list partial reorder: %v", err)
+	}
 	if err := s.ReorderCards(ctx, done.ID, []int64{third.ID, first.ID}); err != nil {
 		t.Fatalf("move card into done list: %v", err)
 	}
