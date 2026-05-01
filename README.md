@@ -101,6 +101,7 @@ GET  /boards                        board list
 POST /boards                        create board
 GET  /boards/{boardID}              board detail with filters
 GET  /boards/{boardID}/archive      archived cards
+GET  /boards/{boardID}/timeline     list-grouped timeline view
 POST /boards/{boardID}/rename       rename board
 POST /boards/{boardID}/delete       delete board
 POST /boards/{boardID}/lists        create list
@@ -109,7 +110,7 @@ POST /lists/{listID}/rename         rename list
 POST /lists/{listID}/delete         delete list
 POST /lists/{listID}/cards          create card
 POST /cards/{cardID}/update         update title/description
-POST /cards/{cardID}/dates          update due date and cover color
+POST /cards/{cardID}/dates          update start date, due date, and cover color
 POST /cards/{cardID}/complete       toggle complete state
 POST /cards/{cardID}/archive        archive card
 POST /cards/{cardID}/restore        restore archived card
@@ -126,6 +127,7 @@ Board filters use URL query parameters:
 
 ```text
 GET /boards/{boardID}?q=release&label=1&due=week&status=incomplete
+GET /boards/{boardID}/timeline?from=2026-05-04&span=6w&q=release
 ```
 
 JSON routes:
@@ -133,6 +135,7 @@ JSON routes:
 ```text
 PATCH /api/lists/reorder
 PATCH /api/cards/reorder
+PATCH /api/cards/{cardID}/timeline
 PATCH /api/checklist-items/{itemID}
 ```
 
@@ -144,6 +147,10 @@ Example payloads:
 
 ```json
 { "toListId": 2, "cardIds": [8, 10, 9] }
+```
+
+```json
+{ "startAt": "2026-05-04", "dueAt": "2026-05-08" }
 ```
 
 ```json
@@ -165,13 +172,14 @@ The migrations create and extend:
 - `attachments`
 - `activity_events`
 
-Each list and card has an integer `position`. After DnD, the server rewrites positions as `1..n` inside a transaction. Archived cards stay in the database with `archived_at` and are excluded from the normal board view.
+Each list and card has an integer `position`. After DnD, the server rewrites positions as `1..n` inside a transaction. Cards can also have `start_at` and `due_at` for the timeline view. Archived cards stay in the database with `archived_at` and are excluded from the normal board view.
 
 ## Usage Notes
 
 - Press `/` on a board to focus the card filter.
 - Use the board toolbar to create labels and filter cards.
-- Open a card to edit details, labels, checklists, comments, attachments, due date, completion, cover color, and archive state.
+- Use the timeline view to see cards grouped by list, then drag or resize bars to save start and due dates.
+- Open a card to edit details, labels, checklists, comments, attachments, start date, due date, completion, cover color, and archive state.
 - URL attachments are limited to `http` and `https`.
 - Destructive actions use confirmation dialogs.
 

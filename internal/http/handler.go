@@ -22,6 +22,7 @@ type DataStore interface {
 	CreateBoard(context.Context, string) (store.Board, error)
 	GetBoardDetail(context.Context, int64, store.BoardFilter) (store.BoardDetail, error)
 	GetArchiveDetail(context.Context, int64) (store.ArchiveDetail, error)
+	GetTimelineDetail(context.Context, int64, store.TimelineOptions) (store.TimelineDetail, error)
 	RenameBoard(context.Context, int64, string) error
 	DeleteBoard(context.Context, int64) error
 	CreateList(context.Context, int64, string) (store.List, error)
@@ -29,7 +30,8 @@ type DataStore interface {
 	DeleteList(context.Context, int64) (int64, error)
 	CreateCard(context.Context, int64, string) (store.Card, error)
 	UpdateCard(context.Context, int64, string, string) (int64, error)
-	UpdateCardDates(context.Context, int64, sql.NullTime, string) (int64, error)
+	UpdateCardDates(context.Context, int64, sql.NullTime, sql.NullTime, string) (int64, error)
+	UpdateCardTimeline(context.Context, int64, time.Time, time.Time) error
 	SetCardComplete(context.Context, int64, bool) (int64, error)
 	ArchiveCard(context.Context, int64) (int64, error)
 	RestoreCard(context.Context, int64) (int64, error)
@@ -61,6 +63,7 @@ func New(data DataStore) http.Handler {
 	mux.HandleFunc("POST /boards", app.createBoard)
 	mux.HandleFunc("GET /boards/{boardID}", app.boardShow)
 	mux.HandleFunc("GET /boards/{boardID}/archive", app.boardArchive)
+	mux.HandleFunc("GET /boards/{boardID}/timeline", app.boardTimeline)
 	mux.HandleFunc("POST /boards/{boardID}/rename", app.renameBoard)
 	mux.HandleFunc("POST /boards/{boardID}/delete", app.deleteBoard)
 	mux.HandleFunc("POST /boards/{boardID}/lists", app.createList)
@@ -82,6 +85,7 @@ func New(data DataStore) http.Handler {
 	mux.HandleFunc("POST /checklist-items/{itemID}/toggle", app.toggleChecklistItem)
 	mux.HandleFunc("PATCH /api/lists/reorder", app.reorderLists)
 	mux.HandleFunc("PATCH /api/cards/reorder", app.reorderCards)
+	mux.HandleFunc("PATCH /api/cards/{cardID}/timeline", app.updateCardTimeline)
 	mux.HandleFunc("PATCH /api/checklist-items/{itemID}", app.toggleChecklistItemAPI)
 
 	return mux
@@ -142,6 +146,19 @@ func (a *App) boardArchive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	render(w, r, view.ArchivePage(detail, errorMessage(r.URL.Query().Get("error"))))
+}
+
+func (a *App) boardTimeline(w http.ResponseWriter, r *http.Request) {
+	boardID, ok := pathID(w, r, "boardID")
+	if !ok {
+		return
+	}
+	detail, err := a.store.GetTimelineDetail(r.Context(), boardID, timelineOptionsFromQuery(r))
+	if err != nil {
+		handleHTMLStoreError(w, r, err, "/boards")
+		return
+	}
+	render(w, r, view.TimelinePage(detail, errorMessage(r.URL.Query().Get("error"))))
 }
 
 func (a *App) renameBoard(w http.ResponseWriter, r *http.Request) {
@@ -330,14 +347,26 @@ func (a *App) updateCardDates(w http.ResponseWriter, r *http.Request) {
 		redirectWithError(w, r, redirectURL, "form_invalid")
 		return
 	}
-	dueAt, ok := parseDueDate(r.FormValue("due_at"))
+	startAt, ok := parseDate(r.FormValue("start_at"))
 	if !ok {
-		redirectWithError(w, r, redirectURL, "due_invalid")
+		redirectWithError(w, r, redirectURL, "date_invalid")
 		return
 	}
-	if _, err := a.store.UpdateCardDates(r.Context(), cardID, dueAt, r.FormValue("cover_color")); err != nil {
+	dueAt, ok := parseDueDate(r.FormValue("due_at"))
+	if !ok {
+		redirectWithError(w, r, redirectURL, "date_invalid")
+		return
+	}
+	if startAt.Valid && dueAt.Valid && startAt.Time.After(dueAt.Time) {
+		redirectWithError(w, r, redirectURL, "date_invalid")
+		return
+	}
+	if _, err := a.store.UpdateCardDates(r.Context(), cardID, startAt, dueAt, r.FormValue("cover_color")); err != nil {
 		handleHTMLStoreError(w, r, err, redirectURL)
 		return
+	}
+	if returnTo := safeLocalReturn(r.FormValue("return_to")); returnTo != "" {
+		redirectURL = returnTo
 	}
 	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
 }
@@ -580,6 +609,44 @@ func (a *App) reorderCards(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (a *App) updateCardTimeline(w http.ResponseWriter, r *http.Request) {
+	cardID, ok := pathID(w, r, "cardID")
+	if !ok {
+		return
+	}
+	var request struct {
+		StartAt string `json:"startAt"`
+		DueAt   string `json:"dueAt"`
+	}
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	startAt, ok := parseRequiredDate(request.StartAt)
+	if !ok {
+		writeJSONError(w, http.StatusBadRequest, "invalid start date")
+		return
+	}
+	dueAt, ok := parseRequiredDate(request.DueAt)
+	if !ok {
+		writeJSONError(w, http.StatusBadRequest, "invalid due date")
+		return
+	}
+	if startAt.After(dueAt) {
+		writeJSONError(w, http.StatusBadRequest, "invalid date range")
+		return
+	}
+	if err := a.store.UpdateCardTimeline(r.Context(), cardID, startAt, dueAt); err != nil {
+		handleJSONStoreError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"cardId":  cardID,
+		"startAt": startAt.Format("2006-01-02"),
+		"dueAt":   dueAt.Format("2006-01-02"),
+	})
+}
+
 func (a *App) toggleChecklistItemAPI(w http.ResponseWriter, r *http.Request) {
 	itemID, ok := pathID(w, r, "itemID")
 	if !ok {
@@ -646,16 +713,61 @@ func filterFromQuery(r *http.Request) store.BoardFilter {
 	}
 }
 
+func timelineOptionsFromQuery(r *http.Request) store.TimelineOptions {
+	values := r.URL.Query()
+	span := values.Get("span")
+	days := 42
+	if span == "quarter" {
+		days = 91
+	} else {
+		span = "6w"
+	}
+	from, ok := parseRequiredDate(values.Get("from"))
+	if !ok {
+		from = currentWeekStart()
+	}
+	return store.TimelineOptions{
+		From:   from,
+		Days:   days,
+		Span:   span,
+		Filter: filterFromQuery(r),
+	}
+}
+
+func currentWeekStart() time.Time {
+	today := truncateDate(time.Now())
+	offset := (int(today.Weekday()) + 6) % 7
+	return today.AddDate(0, 0, -offset)
+}
+
 func parseDueDate(value string) (sql.NullTime, bool) {
+	return parseDate(value)
+}
+
+func parseDate(value string) (sql.NullTime, bool) {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return sql.NullTime{}, true
 	}
+	parsed, ok := parseRequiredDate(value)
+	return sql.NullTime{Time: parsed, Valid: ok}, ok
+}
+
+func parseRequiredDate(value string) (time.Time, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, false
+	}
 	parsed, err := time.ParseInLocation("2006-01-02", value, time.Local)
 	if err != nil {
-		return sql.NullTime{}, false
+		return time.Time{}, false
 	}
-	return sql.NullTime{Time: parsed, Valid: true}, true
+	return truncateDate(parsed), true
+}
+
+func truncateDate(value time.Time) time.Time {
+	year, month, day := value.In(time.Local).Date()
+	return time.Date(year, month, day, 0, 0, 0, 0, time.Local)
 }
 
 func parseBool(value string) bool {
@@ -681,6 +793,14 @@ func parseInt64List(values []string) ([]int64, bool) {
 		ids = append(ids, id)
 	}
 	return ids, true
+}
+
+func safeLocalReturn(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || !strings.HasPrefix(value, "/") || strings.HasPrefix(value, "//") {
+		return ""
+	}
+	return value
 }
 
 func boardURL(boardID int64) string {
@@ -749,8 +869,8 @@ func errorMessage(code string) string {
 		return "添付リンクの名前と URL を入力してください。"
 	case "checklist_required":
 		return "チェックリスト名を入力してください。"
-	case "due_invalid":
-		return "期限の日付を確認してください。"
+	case "due_invalid", "date_invalid":
+		return "開始日と期限の日付を確認してください。"
 	case "invalid_order":
 		return "並び順を保存できませんでした。ページを再読み込みしてください。"
 	case "form_invalid", "invalid_input":

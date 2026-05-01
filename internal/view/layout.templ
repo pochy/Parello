@@ -1,6 +1,6 @@
 package view
 
-templ Layout(title string, content templ.Component) {
+templ Layout(title string, scripts []string, content templ.Component) {
 	<!doctype html>
 	<html lang="ja">
 		<head>
@@ -12,7 +12,9 @@ templ Layout(title string, content templ.Component) {
 			<link rel="stylesheet" href="/static/app.css"/>
 			<script src="https://cdn.jsdelivr.net/npm/basecoat-css@0.3.11/dist/js/all.min.js" defer></script>
 			<script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/sort@3.x.x/dist/cdn.min.js"></script>
-			<script defer src="/static/app.js"></script>
+			for _, script := range scripts {
+				<script defer src={ safeScript(script) }></script>
+			}
 			<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
 		</head>
 		<body class="min-h-dvh bg-zinc-100 text-zinc-950">

@@ -9,3 +9,12 @@
 body.sorting .card-hover {
 	pointer-events: none;
 }
+
+.timeline-card {
+	touch-action: none;
+}
+
+.timeline-dragging {
+	cursor: grabbing;
+	user-select: none;
+}

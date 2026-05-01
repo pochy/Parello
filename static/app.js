@@ -1,28 +1,10 @@
 document.addEventListener('alpine:init', () => {
+	const shared = window.GolangKanban;
+
 	Alpine.data('kanbanBoard', (boardId) => ({
 		boardId,
 		sortError: '',
 		cardError: '',
-		cardIDFromDialog(dialog) {
-			const cardId = (dialog?.id || '').replace('card-', '');
-			return /^\d+$/.test(cardId) ? cardId : '';
-		},
-		cardFormErrorMessage(code) {
-			switch (code) {
-				case 'card_title_required':
-					return 'カード名を入力してください。';
-				case 'checklist_required':
-					return 'チェックリスト名を入力してください。';
-				case 'comment_required':
-					return 'コメントを入力してください。';
-				case 'attachment_required':
-					return '添付リンクの名前と URL を入力してください。';
-				case 'due_invalid':
-					return '期限の日付を確認してください。';
-				default:
-					return '保存できませんでした。入力内容を確認してください。';
-			}
-		},
 		replaceCardTile(cardId, doc) {
 			if (!cardId) {
 				return;
@@ -36,10 +18,7 @@ document.addEventListener('alpine:init', () => {
 			Alpine.mutateDom(() => {
 				currentTile.outerHTML = nextTile.outerHTML;
 			});
-			const updatedTile = document.querySelector(selector);
-			if (updatedTile) {
-				Alpine.initTree(updatedTile);
-			}
+			shared.initTree(document.querySelector(selector));
 		},
 		replaceCardFragments(dialog, nextDialog, fragments) {
 			for (const fragment of fragments) {
@@ -51,47 +30,25 @@ document.addEventListener('alpine:init', () => {
 				Alpine.mutateDom(() => {
 					current.outerHTML = next.outerHTML;
 				});
-				const updated = dialog.querySelector(`[data-card-fragment="${fragment}"]`);
-				if (updated) {
-					Alpine.initTree(updated);
-				}
+				shared.initTree(dialog.querySelector(`[data-card-fragment="${fragment}"]`));
 			}
 		},
 		async submitCardForm(event) {
 			const form = event.target;
 			const dialog = form.closest('dialog[id^="card-"]');
-			const cardId = this.cardIDFromDialog(dialog);
+			const cardId = shared.cardIDFromDialog(dialog);
 			if (!dialog || !cardId) {
 				return;
-			}
-			const data = new URLSearchParams();
-			for (const [key, value] of new FormData(form)) {
-				data.append(key, value);
-			}
-			const submitter = event.submitter;
-			if (submitter?.name && !data.has(submitter.name)) {
-				data.append(submitter.name, submitter.value);
 			}
 			this.cardError = '';
 			form.setAttribute('aria-busy', 'true');
 			try {
-				const response = await fetch(form.action, {
-					method: (form.method || 'POST').toUpperCase(),
-					headers: {
-						'Content-Type': 'application/x-www-form-urlencoded',
-						'X-Requested-With': 'fetch',
-					},
-					body: data,
-				});
-				const responseURL = new URL(response.url || window.location.href, window.location.href);
-				const errorCode = responseURL.searchParams.get('error');
-				if (!response.ok || errorCode) {
-					this.cardError = this.cardFormErrorMessage(errorCode);
+				const result = await shared.fetchFormHTML(form, event.submitter);
+				if (result.errorCode) {
+					this.cardError = shared.cardFormErrorMessage(result.errorCode);
 					return;
 				}
-				const html = await response.text();
-				const doc = new DOMParser().parseFromString(html, 'text/html');
-				const nextDialog = doc.getElementById(dialog.id);
+				const nextDialog = result.doc.getElementById(dialog.id);
 				if (!nextDialog) {
 					this.cardError = '更新後のカードを読み込めませんでした。ページを再読み込みしてください。';
 					return;
@@ -102,7 +59,7 @@ document.addEventListener('alpine:init', () => {
 					.split(/\s+/)
 					.filter(Boolean);
 				this.replaceCardFragments(dialog, nextDialog, [...new Set(fragments)]);
-				this.replaceCardTile(cardId, doc);
+				this.replaceCardTile(cardId, result.doc);
 				this.$nextTick(() => {
 					const updatedScroller = dialog.querySelector('article');
 					if (updatedScroller) {
@@ -117,12 +74,9 @@ document.addEventListener('alpine:init', () => {
 		},
 		async patchJSON(url, payload) {
 			this.sortError = '';
-			const response = await fetch(url, {
-				method: 'PATCH',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(payload),
-			});
-			if (!response.ok) {
+			try {
+				await shared.patchJSON(url, payload);
+			} catch (error) {
 				this.sortError = '並び順を保存できませんでした。ページを再読み込みしてください。';
 			}
 		},

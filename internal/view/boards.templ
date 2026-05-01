@@ -3,7 +3,7 @@ package view
 import "golangkanban/internal/store"
 
 templ BoardsPage(boards []store.Board, pageError string) {
-	@Layout("Boards", BoardsContent(boards, pageError))
+	@Layout("Boards", nil, BoardsContent(boards, pageError))
 }
 
 templ BoardsContent(boards []store.Board, pageError string) {

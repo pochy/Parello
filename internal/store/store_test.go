@@ -129,7 +129,9 @@ func TestStoreTrelloFeatures(t *testing.T) {
 	if _, err := s.SetCardLabels(ctx, card.ID, []int64{labelID}); err != nil {
 		t.Fatalf("set labels: %v", err)
 	}
-	if _, err := s.UpdateCardDates(ctx, card.ID, sql.NullTime{Time: time.Now().Add(48 * time.Hour), Valid: true}, "blue"); err != nil {
+	startAt := sql.NullTime{Time: time.Now().Add(24 * time.Hour), Valid: true}
+	dueAt := sql.NullTime{Time: time.Now().Add(48 * time.Hour), Valid: true}
+	if _, err := s.UpdateCardDates(ctx, card.ID, startAt, dueAt, "blue"); err != nil {
 		t.Fatalf("update dates: %v", err)
 	}
 	if _, err := s.AddComment(ctx, card.ID, "Looks good"); err != nil {
@@ -150,8 +152,27 @@ func TestStoreTrelloFeatures(t *testing.T) {
 	if len(gotCard.Labels) != 1 || gotCard.CommentCount != 1 || gotCard.AttachmentCount != 1 || gotCard.CoverColor != "blue" {
 		t.Fatalf("decorated card = %#v", gotCard)
 	}
+	if !gotCard.StartAt.Valid {
+		t.Fatal("start date was not saved")
+	}
 	if len(gotCard.Checklists) != 1 {
 		t.Fatalf("checklists = %d, want 1", len(gotCard.Checklists))
+	}
+
+	timeline, err := s.GetTimelineDetail(ctx, board.ID, TimelineOptions{
+		From:   time.Now(),
+		Days:   42,
+		Span:   "6w",
+		Filter: BoardFilter{Query: "ship"},
+	})
+	if err != nil {
+		t.Fatalf("timeline detail: %v", err)
+	}
+	if len(timeline.Lists) != 1 || len(timeline.Lists[0].Cards) != 1 {
+		t.Fatalf("timeline cards = %#v", timeline.Lists)
+	}
+	if timeline.Lists[0].Cards[0].DurationDays < 1 {
+		t.Fatalf("timeline duration = %d, want >= 1", timeline.Lists[0].Cards[0].DurationDays)
 	}
 
 	checklistID := gotCard.Checklists[0].ID

@@ -42,6 +42,7 @@ type Card struct {
 	Title              string
 	Description        string
 	Position           int
+	StartAt            sql.NullTime
 	DueAt              sql.NullTime
 	CompletedAt        sql.NullTime
 	CoverColor         string
@@ -138,6 +139,45 @@ type ArchiveDetail struct {
 	Board  Board
 	Cards  []Card
 	Labels []Label
+}
+
+type TimelineOptions struct {
+	From   time.Time
+	Days   int
+	Span   string
+	Filter BoardFilter
+}
+
+type TimelineDetail struct {
+	Board       Board
+	Lists       []TimelineList
+	Labels      []Label
+	Filter      BoardFilter
+	From        time.Time
+	Through     time.Time
+	Days        []time.Time
+	Span        string
+	PrevFrom    time.Time
+	NextFrom    time.Time
+	Unscheduled []Card
+}
+
+type TimelineList struct {
+	List        List
+	Cards       []TimelineCard
+	Unscheduled []Card
+	LaneCount   int
+}
+
+type TimelineCard struct {
+	Card         Card
+	StartDate    time.Time
+	DueDate      time.Time
+	StartOffset  int
+	DueOffset    int
+	OffsetDays   int
+	DurationDays int
+	Lane         int
 }
 
 type Store struct {
@@ -261,7 +301,7 @@ func (s *Store) GetArchiveDetail(ctx context.Context, boardID int64) (ArchiveDet
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT c.id, c.list_id, c.title, c.description, c.position, c.due_at, c.completed_at, c.cover_color, c.archived_at, c.created_at, c.updated_at
+		SELECT c.id, c.list_id, c.title, c.description, c.position, c.start_at, c.due_at, c.completed_at, c.cover_color, c.archived_at, c.created_at, c.updated_at
 		FROM cards c
 		JOIN lists l ON l.id = c.list_id
 		WHERE l.board_id = $1 AND c.archived_at IS NOT NULL
@@ -285,6 +325,102 @@ func (s *Store) GetArchiveDetail(ctx context.Context, boardID int64) (ArchiveDet
 	cardIndex := cardIndexForCards(detail.Cards)
 	if err := loadCardDecorations(ctx, s.db, boardID, cardIndex); err != nil {
 		return ArchiveDetail{}, err
+	}
+	return detail, nil
+}
+
+func (s *Store) GetTimelineDetail(ctx context.Context, boardID int64, options TimelineOptions) (TimelineDetail, error) {
+	board, err := s.getBoard(ctx, boardID)
+	if err != nil {
+		return TimelineDetail{}, err
+	}
+	labels, err := loadBoardLabels(ctx, s.db, boardID)
+	if err != nil {
+		return TimelineDetail{}, err
+	}
+
+	options = normalizeTimelineOptions(options)
+	detail := TimelineDetail{
+		Board:    board,
+		Labels:   labels,
+		Filter:   normalizeFilter(options.Filter),
+		From:     options.From,
+		Through:  options.From.AddDate(0, 0, options.Days-1),
+		Days:     timelineDays(options.From, options.Days),
+		Span:     options.Span,
+		PrevFrom: options.From.AddDate(0, 0, -options.Days),
+		NextFrom: options.From.AddDate(0, 0, options.Days),
+	}
+
+	listRows, err := s.db.QueryContext(ctx, `
+		SELECT id, board_id, title, position, archived_at, created_at, updated_at
+		FROM lists
+		WHERE board_id = $1 AND archived_at IS NULL
+		ORDER BY position ASC, id ASC`, boardID)
+	if err != nil {
+		return TimelineDetail{}, err
+	}
+	defer listRows.Close()
+
+	listIndex := make(map[int64]int)
+	for listRows.Next() {
+		var list List
+		if err := listRows.Scan(&list.ID, &list.BoardID, &list.Title, &list.Position, &list.ArchivedAt, &list.CreatedAt, &list.UpdatedAt); err != nil {
+			return TimelineDetail{}, err
+		}
+		listIndex[list.ID] = len(detail.Lists)
+		detail.Lists = append(detail.Lists, TimelineList{List: list, LaneCount: 1})
+	}
+	if err := listRows.Err(); err != nil {
+		return TimelineDetail{}, err
+	}
+
+	query, args := timelineCardsQuery(boardID, detail.Filter, detail.From, detail.Through)
+	cardRows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return TimelineDetail{}, err
+	}
+	defer cardRows.Close()
+
+	var cards []Card
+	for cardRows.Next() {
+		card, err := scanCard(cardRows)
+		if err != nil {
+			return TimelineDetail{}, err
+		}
+		cards = append(cards, card)
+	}
+	if err := cardRows.Err(); err != nil {
+		return TimelineDetail{}, err
+	}
+
+	cardIndex := cardIndexForCards(cards)
+	if err := loadCardDecorations(ctx, s.db, boardID, cardIndex); err != nil {
+		return TimelineDetail{}, err
+	}
+
+	laneEnds := make(map[int64][]time.Time)
+	for _, card := range cards {
+		idx, ok := listIndex[card.ListID]
+		if !ok {
+			continue
+		}
+		start, due, scheduled := cardTimelineRange(card)
+		if !scheduled {
+			detail.Lists[idx].Unscheduled = append(detail.Lists[idx].Unscheduled, card)
+			detail.Unscheduled = append(detail.Unscheduled, card)
+			continue
+		}
+		if due.Before(detail.From) || start.After(detail.Through) {
+			continue
+		}
+		item := buildTimelineCard(card, start, due, detail.From, detail.Through)
+		item.Lane = assignTimelineLane(start, due, laneEnds[card.ListID])
+		laneEnds[card.ListID] = updateTimelineLaneEnd(start, due, item.Lane, laneEnds[card.ListID])
+		detail.Lists[idx].Cards = append(detail.Lists[idx].Cards, item)
+		if len(laneEnds[card.ListID]) > detail.Lists[idx].LaneCount {
+			detail.Lists[idx].LaneCount = len(laneEnds[card.ListID])
+		}
 	}
 	return detail, nil
 }
@@ -425,8 +561,8 @@ func (s *Store) CreateCard(ctx context.Context, listID int64, title string) (Car
 			FROM cards
 			WHERE list_id = $1 AND archived_at IS NULL
 		))
-		RETURNING id, list_id, title, description, position, due_at, completed_at, cover_color, archived_at, created_at, updated_at`, listID, title).
-		Scan(&card.ID, &card.ListID, &card.Title, &card.Description, &card.Position, &card.DueAt, &card.CompletedAt, &card.CoverColor, &card.ArchivedAt, &card.CreatedAt, &card.UpdatedAt)
+		RETURNING id, list_id, title, description, position, start_at, due_at, completed_at, cover_color, archived_at, created_at, updated_at`, listID, title).
+		Scan(&card.ID, &card.ListID, &card.Title, &card.Description, &card.Position, &card.StartAt, &card.DueAt, &card.CompletedAt, &card.CoverColor, &card.ArchivedAt, &card.CreatedAt, &card.UpdatedAt)
 	if err != nil {
 		return Card{}, err
 	}
@@ -480,7 +616,10 @@ func (s *Store) UpdateCard(ctx context.Context, cardID int64, title string, desc
 	return boardID, nil
 }
 
-func (s *Store) UpdateCardDates(ctx context.Context, cardID int64, dueAt sql.NullTime, coverColor string) (int64, error) {
+func (s *Store) UpdateCardDates(ctx context.Context, cardID int64, startAt sql.NullTime, dueAt sql.NullTime, coverColor string) (int64, error) {
+	if !validDateRange(startAt, dueAt) {
+		return 0, ErrInvalidInput
+	}
 	coverColor = cleanColor(coverColor)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -498,18 +637,55 @@ func (s *Store) UpdateCardDates(ctx context.Context, cardID int64, dueAt sql.Nul
 	}
 	_, err = tx.ExecContext(ctx, `
 		UPDATE cards
-		SET due_at = $2, cover_color = $3, updated_at = now()
-		WHERE id = $1`, cardID, nullableTimeArg(dueAt), coverColor)
+		SET start_at = $2, due_at = $3, cover_color = $4, updated_at = now()
+		WHERE id = $1`, cardID, nullableTimeArg(startAt), nullableTimeArg(dueAt), coverColor)
 	if err != nil {
 		return 0, err
 	}
-	if err := recordActivityTx(ctx, tx, boardID, cardID, "card_dates_updated", "期限とカバーを更新しました"); err != nil {
+	if err := recordActivityTx(ctx, tx, boardID, cardID, "card_dates_updated", "日付とカバーを更新しました"); err != nil {
 		return 0, err
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
 	return boardID, nil
+}
+
+func (s *Store) UpdateCardTimeline(ctx context.Context, cardID int64, startAt time.Time, dueAt time.Time) error {
+	startAt = truncateDay(startAt)
+	dueAt = truncateDay(dueAt)
+	if startAt.After(dueAt) {
+		return ErrInvalidInput
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer rollback(tx)
+
+	listID, err := listIDForCardTx(ctx, tx, cardID)
+	if err != nil {
+		return err
+	}
+	boardID, err := boardIDForListTx(ctx, tx, listID)
+	if err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `
+		UPDATE cards
+		SET start_at = $2, due_at = $3, updated_at = now()
+		WHERE id = $1 AND archived_at IS NULL`, cardID, startAt, dueAt)
+	if err != nil {
+		return err
+	}
+	if err := ensureAffected(result); err != nil {
+		return err
+	}
+	if err := recordActivityTx(ctx, tx, boardID, cardID, "card_timeline_updated", "タイムライン日付を更新しました"); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) SetCardComplete(ctx context.Context, cardID int64, complete bool) (int64, error) {
@@ -1139,7 +1315,7 @@ func (s *Store) getBoard(ctx context.Context, boardID int64) (Board, error) {
 
 func scanCard(scanner rowScanner) (Card, error) {
 	var card Card
-	err := scanner.Scan(&card.ID, &card.ListID, &card.Title, &card.Description, &card.Position, &card.DueAt, &card.CompletedAt, &card.CoverColor, &card.ArchivedAt, &card.CreatedAt, &card.UpdatedAt)
+	err := scanner.Scan(&card.ID, &card.ListID, &card.Title, &card.Description, &card.Position, &card.StartAt, &card.DueAt, &card.CompletedAt, &card.CoverColor, &card.ArchivedAt, &card.CreatedAt, &card.UpdatedAt)
 	return card, err
 }
 
@@ -1196,11 +1372,60 @@ func boardCardsQuery(boardID int64, filter BoardFilter, archived bool) (string, 
 	}
 
 	query := `
-		SELECT c.id, c.list_id, c.title, c.description, c.position, c.due_at, c.completed_at, c.cover_color, c.archived_at, c.created_at, c.updated_at
+		SELECT c.id, c.list_id, c.title, c.description, c.position, c.start_at, c.due_at, c.completed_at, c.cover_color, c.archived_at, c.created_at, c.updated_at
 		FROM cards c
 		JOIN lists l ON l.id = c.list_id
 		WHERE ` + strings.Join(where, " AND ") + `
 		ORDER BY l.position ASC, l.id ASC, c.position ASC, c.id ASC`
+	return query, args
+}
+
+func timelineCardsQuery(boardID int64, filter BoardFilter, from time.Time, through time.Time) (string, []any) {
+	args := []any{boardID}
+	where := []string{"l.board_id = $1", "l.archived_at IS NULL", "c.archived_at IS NULL"}
+
+	if filter.Query != "" {
+		args = append(args, "%"+filter.Query+"%")
+		where = append(where, "(c.title ILIKE $"+placeholder(len(args))+" OR c.description ILIKE $"+placeholder(len(args))+")")
+	}
+	if filter.Label > 0 {
+		args = append(args, filter.Label)
+		where = append(where, "EXISTS (SELECT 1 FROM card_labels cl WHERE cl.card_id = c.id AND cl.label_id = $"+placeholder(len(args))+")")
+	}
+	switch filter.Due {
+	case "overdue":
+		where = append(where, "c.due_at IS NOT NULL AND c.due_at < now() AND c.completed_at IS NULL")
+	case "today":
+		where = append(where, "c.due_at IS NOT NULL AND c.due_at >= date_trunc('day', now()) AND c.due_at < date_trunc('day', now()) + interval '1 day'")
+	case "week":
+		where = append(where, "c.due_at IS NOT NULL AND c.due_at >= now() AND c.due_at < now() + interval '7 days'")
+	case "none":
+		where = append(where, "c.due_at IS NULL")
+	}
+	switch filter.Status {
+	case "complete":
+		where = append(where, "c.completed_at IS NOT NULL")
+	case "incomplete":
+		where = append(where, "c.completed_at IS NULL")
+	}
+
+	args = append(args, from, through)
+	fromPlaceholder := placeholder(len(args) - 1)
+	throughPlaceholder := placeholder(len(args))
+	where = append(where, `(
+		(c.start_at IS NULL AND c.due_at IS NULL)
+		OR (
+			COALESCE(c.due_at, c.start_at) >= $`+fromPlaceholder+`
+			AND COALESCE(c.start_at, c.due_at) <= $`+throughPlaceholder+`
+		)
+	)`)
+
+	query := `
+		SELECT c.id, c.list_id, c.title, c.description, c.position, c.start_at, c.due_at, c.completed_at, c.cover_color, c.archived_at, c.created_at, c.updated_at
+		FROM cards c
+		JOIN lists l ON l.id = c.list_id
+		WHERE ` + strings.Join(where, " AND ") + `
+		ORDER BY l.position ASC, l.id ASC, COALESCE(c.start_at, c.due_at) ASC NULLS LAST, COALESCE(c.due_at, c.start_at) ASC NULLS LAST, c.position ASC, c.id ASC`
 	return query, args
 }
 
@@ -1465,9 +1690,127 @@ var allowedColors = map[string]struct{}{
 
 func nullableTimeArg(value sql.NullTime) any {
 	if value.Valid {
-		return value.Time
+		return truncateDay(value.Time)
 	}
 	return nil
+}
+
+func validDateRange(startAt sql.NullTime, dueAt sql.NullTime) bool {
+	if !startAt.Valid || !dueAt.Valid {
+		return true
+	}
+	return !truncateDay(startAt.Time).After(truncateDay(dueAt.Time))
+}
+
+func normalizeTimelineOptions(options TimelineOptions) TimelineOptions {
+	if options.Days <= 0 {
+		options.Days = 42
+	}
+	if options.Span != "quarter" {
+		options.Span = "6w"
+	}
+	if options.Span == "quarter" {
+		options.Days = 91
+	}
+	if options.From.IsZero() {
+		options.From = weekStart(time.Now())
+	}
+	options.From = truncateDay(options.From)
+	options.Filter = normalizeFilter(options.Filter)
+	return options
+}
+
+func timelineDays(from time.Time, count int) []time.Time {
+	days := make([]time.Time, count)
+	for i := range days {
+		days[i] = from.AddDate(0, 0, i)
+	}
+	return days
+}
+
+func cardTimelineRange(card Card) (time.Time, time.Time, bool) {
+	if !card.StartAt.Valid && !card.DueAt.Valid {
+		return time.Time{}, time.Time{}, false
+	}
+	start := card.StartAt.Time
+	if !card.StartAt.Valid {
+		start = card.DueAt.Time
+	}
+	due := card.DueAt.Time
+	if !card.DueAt.Valid {
+		due = card.StartAt.Time
+	}
+	start = truncateDay(start)
+	due = truncateDay(due)
+	if start.After(due) {
+		return due, start, true
+	}
+	return start, due, true
+}
+
+func buildTimelineCard(card Card, start time.Time, due time.Time, from time.Time, through time.Time) TimelineCard {
+	startOffset := daysBetween(from, start)
+	dueOffset := daysBetween(from, due)
+	visibleStart := maxInt(0, startOffset)
+	visibleDue := minInt(daysBetween(from, through), dueOffset)
+	return TimelineCard{
+		Card:         card,
+		StartDate:    start,
+		DueDate:      due,
+		StartOffset:  startOffset,
+		DueOffset:    dueOffset,
+		OffsetDays:   visibleStart,
+		DurationDays: maxInt(1, visibleDue-visibleStart+1),
+	}
+}
+
+func assignTimelineLane(start time.Time, due time.Time, laneEnds []time.Time) int {
+	for idx, laneEnd := range laneEnds {
+		if start.After(laneEnd) {
+			return idx
+		}
+	}
+	return len(laneEnds)
+}
+
+func updateTimelineLaneEnd(_ time.Time, due time.Time, lane int, laneEnds []time.Time) []time.Time {
+	for len(laneEnds) <= lane {
+		laneEnds = append(laneEnds, time.Time{})
+	}
+	laneEnds[lane] = due
+	return laneEnds
+}
+
+func weekStart(value time.Time) time.Time {
+	day := truncateDay(value)
+	offset := (int(day.Weekday()) + 6) % 7
+	return day.AddDate(0, 0, -offset)
+}
+
+func truncateDay(value time.Time) time.Time {
+	if value.IsZero() {
+		return value
+	}
+	year, month, day := value.In(time.Local).Date()
+	return time.Date(year, month, day, 0, 0, 0, 0, time.Local)
+}
+
+func daysBetween(from time.Time, to time.Time) int {
+	return int(truncateDay(to).Sub(truncateDay(from)).Hours() / 24)
+}
+
+func minInt(a int, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxInt(a int, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func ensureAffected(result sql.Result) error {
