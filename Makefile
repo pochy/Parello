@@ -3,10 +3,13 @@ ADDR ?= :8080
 GOOSE := go run github.com/pressly/goose/v3/cmd/goose@v3.27.1
 TEMPL := go run github.com/a-h/templ/cmd/templ@v0.3.1001
 
-.PHONY: db-up migrate-up migrate-down templ run test
+.PHONY: db-up db-down migrate-up migrate-down templ run test
 
 db-up:
 	docker-compose up -d postgres
+
+db-down:
+	docker-compose stop postgres
 
 migrate-up:
 	$(GOOSE) -dir migrations postgres "$(DATABASE_URL)" up
