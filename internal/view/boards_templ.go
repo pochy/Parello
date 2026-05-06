@@ -60,7 +60,15 @@ func BoardsContent(boards []store.Board, pageError string) templ.Component {
 			templ_7745c5c3_Var2 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<main class=\"mx-auto flex min-h-dvh w-full max-w-6xl flex-col gap-8 px-4 py-8 sm:px-6 lg:px-8\"><header class=\"flex flex-col gap-5 border-b border-zinc-200 pb-6 sm:flex-row sm:items-end sm:justify-between\"><div class=\"space-y-2\"><p class=\"text-sm font-medium text-zinc-500\">GolangKanban</p><h1 class=\"text-balance text-3xl font-semibold text-zinc-950\">ボード</h1><p class=\"max-w-2xl text-pretty text-sm text-zinc-600\">ローカルで使うシンプルなカンバンボードです。</p></div><form action=\"/boards\" method=\"post\" class=\"form flex w-full flex-col gap-2 sm:w-96\"><label for=\"board-title\" class=\"label\">新しいボード</label><div class=\"flex items-center gap-2\"><input id=\"board-title\" class=\"input\" type=\"text\" name=\"title\" placeholder=\"例: プロダクト開発\" required> <button type=\"submit\" class=\"btn whitespace-nowrap\">作成</button></div>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<main class=\"mx-auto flex min-h-dvh w-full max-w-6xl flex-col gap-8 px-4 py-8 sm:px-6 lg:px-8\"><header class=\"flex flex-col gap-5 border-b border-zinc-200 pb-6 sm:flex-row sm:items-end sm:justify-between\"><div class=\"space-y-2\"><p class=\"text-sm font-medium text-zinc-500\">GolangKanban</p><h1 class=\"text-balance text-3xl font-semibold text-zinc-950\">ボード</h1><p class=\"max-w-2xl text-pretty text-sm text-zinc-600\">ローカルで使うシンプルなカンバンボードです。</p></div><form action=\"/boards\" method=\"post\" class=\"form flex w-full flex-col gap-2 sm:w-96\">")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = CSRFInput().Render(ctx, templ_7745c5c3_Buffer)
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, "<label for=\"board-title\" class=\"label\">新しいボード</label><div class=\"flex items-center gap-2\"><input id=\"board-title\" class=\"input\" type=\"text\" name=\"title\" placeholder=\"例: プロダクト開発\" required> <button type=\"submit\" class=\"btn whitespace-nowrap\">作成</button></div>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -70,7 +78,7 @@ func BoardsContent(boards []store.Board, pageError string) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, "</form></header>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, "</form></header>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -80,61 +88,61 @@ func BoardsContent(boards []store.Board, pageError string) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		} else {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, "<section class=\"grid gap-4 sm:grid-cols-2 lg:grid-cols-3\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, "<section class=\"grid gap-4 sm:grid-cols-2 lg:grid-cols-3\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			for _, board := range boards {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, "<a href=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "<a href=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var3 templ.SafeURL
 				templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.JoinURLErrs(boardURL(board.ID))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/view/boards.templ`, Line: 33, Col: 33}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/view/boards.templ`, Line: 34, Col: 33}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var3))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "\" class=\"card block transition hover:border-zinc-300 hover:shadow\"><section class=\"flex min-h-28 flex-col justify-between gap-6\"><h2 class=\"truncate text-lg font-semibold text-zinc-950\">")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 6, "\" class=\"card block transition hover:border-zinc-300 hover:shadow\"><section class=\"flex min-h-28 flex-col justify-between gap-6\"><h2 class=\"truncate text-lg font-semibold text-zinc-950\">")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var4 string
 				templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinStringErrs(board.Title)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/view/boards.templ`, Line: 35, Col: 77}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/view/boards.templ`, Line: 36, Col: 77}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 6, "</h2><p class=\"badge-outline w-fit tabular-nums\">Board #")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "</h2><p class=\"badge-outline w-fit tabular-nums\">Board #")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var5 string
 				templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinStringErrs(idString(board.ID))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/view/boards.templ`, Line: 36, Col: 78}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/view/boards.templ`, Line: 37, Col: 78}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var5))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "</p></section></a>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 8, "</p></section></a>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 8, "</section>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 9, "</section>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 9, "</main>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 10, "</main>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

@@ -89,7 +89,7 @@ func New(data DataStore) http.Handler {
 	mux.HandleFunc("PATCH /api/cards/{cardID}/timeline", app.updateCardTimeline)
 	mux.HandleFunc("PATCH /api/checklist-items/{itemID}", app.toggleChecklistItemAPI)
 
-	return mux
+	return securityMiddleware(newCSRFSessionStore(), mux)
 }
 
 func (a *App) redirectRoot(w http.ResponseWriter, r *http.Request) {

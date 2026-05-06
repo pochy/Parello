@@ -28,6 +28,104 @@ func TestRootRedirectsToBoards(t *testing.T) {
 	}
 }
 
+func TestSecurityHeadersAndCSRFSessionOnGET(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/boards", nil)
+	rec := httptest.NewRecorder()
+
+	New(&fakeStore{}).ServeHTTP(rec, req)
+
+	assertStatus(t, rec, http.StatusOK)
+	if rec.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("missing nosniff header")
+	}
+	if rec.Header().Get("Referrer-Policy") != "same-origin" {
+		t.Fatalf("missing referrer policy")
+	}
+	if rec.Header().Get("X-Frame-Options") != "DENY" {
+		t.Fatalf("missing frame options")
+	}
+	if rec.Header().Get("Content-Security-Policy-Report-Only") == "" {
+		t.Fatalf("missing report-only csp")
+	}
+	var session *http.Cookie
+	for _, cookie := range rec.Result().Cookies() {
+		if cookie.Name == sessionCookieName {
+			session = cookie
+			break
+		}
+	}
+	if session == nil {
+		t.Fatalf("missing %s cookie", sessionCookieName)
+	}
+	if !session.HttpOnly || session.SameSite != http.SameSiteStrictMode || session.Path != "/" {
+		t.Fatalf("session cookie attributes = %#v", session)
+	}
+	body := rec.Body.String()
+	assertContains(t, body, `<meta name="csrf-token" content="`, `name="_csrf"`)
+}
+
+func TestCSRFRejectsUnsafeRequests(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(http.Handler, *http.Request)
+	}{
+		{
+			name:  "missing token",
+			setup: func(http.Handler, *http.Request) {},
+		},
+		{
+			name: "mismatched token",
+			setup: func(handler http.Handler, req *http.Request) {
+				authorizeUnsafeRequest(handler, req)
+				req.Header.Set(csrfHeaderName, "wrong")
+			},
+		},
+		{
+			name: "unknown session",
+			setup: func(_ http.Handler, req *http.Request) {
+				req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "unknown"})
+				req.Header.Set(csrfHeaderName, "token")
+				req.Header.Set("Origin", "http://"+req.Host)
+			},
+		},
+		{
+			name: "cross origin",
+			setup: func(handler http.Handler, req *http.Request) {
+				authorizeUnsafeRequest(handler, req)
+				req.Header.Set("Origin", "http://attacker.example")
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := formRequest(http.MethodPost, "/boards", url.Values{"title": {"Blocked"}})
+			rec := httptest.NewRecorder()
+			fake := &fakeStore{}
+			handler := New(fake)
+			tt.setup(handler, req)
+
+			handler.ServeHTTP(rec, req)
+
+			assertStatus(t, rec, http.StatusForbidden)
+			if fake.createdBoardTitle != "" {
+				t.Fatalf("unsafe request reached store with title %q", fake.createdBoardTitle)
+			}
+		})
+	}
+}
+
+func TestCSRFRejectsJSONWithJSONError(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPatch, "/api/lists/reorder", bytes.NewBufferString(`{"boardId":7,"listIds":[3]}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	New(&fakeStore{}).ServeHTTP(rec, req)
+
+	assertStatus(t, rec, http.StatusForbidden)
+	assertContains(t, rec.Header().Get("Content-Type"), "application/json")
+	assertContains(t, rec.Body.String(), `"error":"forbidden"`)
+}
+
 func TestCreateBoardRedirectsToCreatedBoard(t *testing.T) {
 	fake := &fakeStore{}
 	rec := serve(formRequest(http.MethodPost, "/boards", url.Values{"title": {"Roadmap"}}), fake)
@@ -39,6 +137,78 @@ func TestCreateBoardRedirectsToCreatedBoard(t *testing.T) {
 	if fake.createdBoardTitle != "Roadmap" {
 		t.Fatalf("created title = %q, want Roadmap", fake.createdBoardTitle)
 	}
+}
+
+func TestCSRFAllowsFormFieldToken(t *testing.T) {
+	fake := &fakeStore{}
+	handler := New(fake)
+	prime := httptest.NewRequest(http.MethodGet, "/boards", nil)
+	primeRec := httptest.NewRecorder()
+	handler.ServeHTTP(primeRec, prime)
+	token := csrfTokenFromBody(primeRec.Body.String())
+	if token == "" {
+		t.Fatal("missing csrf token")
+	}
+	var session *http.Cookie
+	for _, cookie := range primeRec.Result().Cookies() {
+		if cookie.Name == sessionCookieName {
+			session = cookie
+			break
+		}
+	}
+	if session == nil {
+		t.Fatal("missing session cookie")
+	}
+	req := formRequest(http.MethodPost, "/boards", url.Values{"title": {"Roadmap"}, csrfFormField: {token}})
+	req.AddCookie(session)
+	req.Header.Set("Origin", "http://"+req.Host)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assertStatus(t, rec, http.StatusSeeOther)
+	if fake.createdBoardTitle != "Roadmap" {
+		t.Fatalf("created title = %q, want Roadmap", fake.createdBoardTitle)
+	}
+}
+
+func TestBoardHTMLDoesNotRenderUserContentAsHTML(t *testing.T) {
+	payload := `<script>alert(1)</script><span hx-get="/pwn">x</span>`
+	req := httptest.NewRequest(http.MethodGet, "/boards/7", nil)
+	rec := httptest.NewRecorder()
+	fake := &fakeStore{boardDetail: store.BoardDetail{
+		Board: store.Board{ID: 7, Title: payload},
+		Lists: []store.List{{
+			ID:      3,
+			BoardID: 7,
+			Title:   payload,
+			Cards: []store.Card{{
+				ID:          9,
+				ListID:      3,
+				Title:       payload,
+				Description: payload,
+				Labels:      []store.Label{{ID: 5, BoardID: 7, Name: payload, Color: "red"}},
+				Comments:    []store.Comment{{ID: 1, CardID: 9, Body: payload}},
+				Checklists: []store.Checklist{{
+					ID:     11,
+					CardID: 9,
+					Title:  payload,
+					Items:  []store.ChecklistItem{{ID: 12, ChecklistID: 11, Title: payload}},
+				}},
+				Attachments: []store.Attachment{{ID: 2, CardID: 9, Title: "bad link", URL: "javascript:alert(1)"}},
+			}},
+		}},
+		Labels: []store.Label{{ID: 5, BoardID: 7, Name: payload, Color: "red"}},
+	}}
+
+	New(fake).ServeHTTP(rec, req)
+
+	assertStatus(t, rec, http.StatusOK)
+	body := rec.Body.String()
+	if strings.Contains(body, payload) || strings.Contains(body, `<script>`) || strings.Contains(body, `hx-get="/pwn"`) || strings.Contains(body, `javascript:alert(1)`) {
+		t.Fatalf("body rendered unsafe user content: %s", body)
+	}
+	assertContains(t, body, `&lt;script&gt;alert(1)&lt;/script&gt;`, `hx-get=&#34;/pwn&#34;`)
 }
 
 func formRequest(method string, path string, form url.Values) *http.Request {
@@ -55,8 +225,46 @@ func htmxPost(path string, form url.Values) *http.Request {
 
 func serve(req *http.Request, fake *fakeStore) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
-	New(fake).ServeHTTP(rec, req)
+	handler := New(fake)
+	authorizeUnsafeRequest(handler, req)
+	handler.ServeHTTP(rec, req)
 	return rec
+}
+
+func authorizeUnsafeRequest(handler http.Handler, req *http.Request) {
+	if safeMethod(req.Method) {
+		return
+	}
+	prime := httptest.NewRequest(http.MethodGet, "/boards", nil)
+	primeRec := httptest.NewRecorder()
+	handler.ServeHTTP(primeRec, prime)
+	token := csrfTokenFromBody(primeRec.Body.String())
+	for _, cookie := range primeRec.Result().Cookies() {
+		if cookie.Name == sessionCookieName {
+			req.AddCookie(cookie)
+			break
+		}
+	}
+	if token != "" {
+		req.Header.Set(csrfHeaderName, token)
+	}
+	if req.Header.Get("Origin") == "" {
+		req.Header.Set("Origin", "http://"+req.Host)
+	}
+}
+
+func csrfTokenFromBody(body string) string {
+	const marker = `<meta name="csrf-token" content="`
+	start := strings.Index(body, marker)
+	if start == -1 {
+		return ""
+	}
+	start += len(marker)
+	end := strings.Index(body[start:], `"`)
+	if end == -1 {
+		return ""
+	}
+	return body[start : start+end]
 }
 
 func assertStatus(t *testing.T, rec *httptest.ResponseRecorder, status int) {
@@ -164,7 +372,9 @@ func TestReorderListsJSON(t *testing.T) {
 	rec := httptest.NewRecorder()
 	fake := &fakeStore{}
 
-	New(fake).ServeHTTP(rec, req)
+	handler := New(fake)
+	authorizeUnsafeRequest(handler, req)
+	handler.ServeHTTP(rec, req)
 
 	assertStatus(t, rec, http.StatusNoContent)
 	if fake.reorderBoardID != 7 {
@@ -181,7 +391,9 @@ func TestToggleChecklistItemJSON(t *testing.T) {
 	rec := httptest.NewRecorder()
 	fake := &fakeStore{}
 
-	New(fake).ServeHTTP(rec, req)
+	handler := New(fake)
+	authorizeUnsafeRequest(handler, req)
+	handler.ServeHTTP(rec, req)
 
 	assertStatus(t, rec, http.StatusOK)
 	if fake.toggledItemID != 9 {
@@ -197,7 +409,9 @@ func TestBoardTimelineRenders(t *testing.T) {
 	rec := httptest.NewRecorder()
 	fake := &fakeStore{}
 
-	New(fake).ServeHTTP(rec, req)
+	handler := New(fake)
+	authorizeUnsafeRequest(handler, req)
+	handler.ServeHTTP(rec, req)
 
 	assertStatus(t, rec, http.StatusOK)
 	if fake.timelineBoardID != 7 {
@@ -212,7 +426,9 @@ func TestTimelineFilterHTMXRendersTimelineTarget(t *testing.T) {
 	rec := httptest.NewRecorder()
 	fake := &fakeStore{}
 
-	New(fake).ServeHTTP(rec, req)
+	handler := New(fake)
+	authorizeUnsafeRequest(handler, req)
+	handler.ServeHTTP(rec, req)
 
 	assertStatus(t, rec, http.StatusOK)
 	body := rec.Body.String()
@@ -229,7 +445,9 @@ func TestTimelineRefreshHTMXUsesCurrentURLFilter(t *testing.T) {
 	rec := httptest.NewRecorder()
 	fake := &fakeStore{}
 
-	New(fake).ServeHTTP(rec, req)
+	handler := New(fake)
+	authorizeUnsafeRequest(handler, req)
+	handler.ServeHTTP(rec, req)
 
 	assertStatus(t, rec, http.StatusOK)
 	if fake.timelineFilter.Query != "launch" {
@@ -243,7 +461,9 @@ func TestUpdateCardTimelineJSON(t *testing.T) {
 	rec := httptest.NewRecorder()
 	fake := &fakeStore{}
 
-	New(fake).ServeHTTP(rec, req)
+	handler := New(fake)
+	authorizeUnsafeRequest(handler, req)
+	handler.ServeHTTP(rec, req)
 
 	assertStatus(t, rec, http.StatusOK)
 	if fake.timelineCardID != 9 {
@@ -270,7 +490,9 @@ func TestUpdateCardTimelineRejectsInvertedDates(t *testing.T) {
 	rec := httptest.NewRecorder()
 	fake := &fakeStore{}
 
-	New(fake).ServeHTTP(rec, req)
+	handler := New(fake)
+	authorizeUnsafeRequest(handler, req)
+	handler.ServeHTTP(rec, req)
 
 	assertStatus(t, rec, http.StatusBadRequest)
 	if fake.timelineCardID != 0 {

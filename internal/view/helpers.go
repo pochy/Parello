@@ -1,6 +1,7 @@
 package view
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -10,6 +11,21 @@ import (
 
 	"golangkanban/internal/store"
 )
+
+type csrfContextKey struct{}
+
+func WithCSRFToken(ctx context.Context, token string) context.Context {
+	return context.WithValue(ctx, csrfContextKey{}, token)
+}
+
+func CSRFToken(ctx context.Context) string {
+	token, _ := ctx.Value(csrfContextKey{}).(string)
+	return token
+}
+
+func csrfToken(ctx context.Context) string {
+	return CSRFToken(ctx)
+}
 
 func boardURL(id int64) templ.SafeURL {
 	return templ.SafeURL(fmt.Sprintf("/boards/%d", id))
@@ -58,6 +74,14 @@ func listCardsAction(id int64) templ.SafeURL {
 
 func cardAction(id int64, action string) templ.SafeURL {
 	return templ.SafeURL(fmt.Sprintf("/cards/%d/%s", id, action))
+}
+
+func attachmentURL(rawURL string) (templ.SafeURL, bool) {
+	parsed, err := url.ParseRequestURI(rawURL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return "", false
+	}
+	return templ.SafeURL(rawURL), true
 }
 
 func checklistItemsAction(cardID int64, checklistID int64) templ.SafeURL {

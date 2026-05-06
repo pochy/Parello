@@ -21,12 +21,14 @@ templ BoardContent(detail store.BoardDetail, pageError string) {
 					<div class="min-w-0 space-y-2">
 						<a href="/boards" class="text-sm font-medium text-zinc-500 hover:text-zinc-900">ボード一覧</a>
 						<form hx-post={ boardAction(detail.Board.ID, "rename") } class="form flex max-w-2xl items-center gap-2">
+							@CSRFInput()
 							<input aria-label="ボード名" class="input text-lg font-semibold sm:text-xl" type="text" name="title" value={ detail.Board.Title } required/>
 							<button type="submit" class="btn-outline whitespace-nowrap">保存</button>
 						</form>
 					</div>
 					<div class="flex flex-col gap-2 sm:flex-row sm:items-center">
 						<form hx-post={ boardAction(detail.Board.ID, "lists") } class="form flex min-w-0 items-center gap-2 sm:w-80">
+							@CSRFInput()
 							<input aria-label="新しいリスト" class="input" type="text" name="title" placeholder="新しいリスト" required/>
 							<button type="submit" class="btn whitespace-nowrap">追加</button>
 						</form>
@@ -111,6 +113,7 @@ templ LabelManager(detail store.BoardDetail) {
 					</div>
 				}
 				<form hx-post={ boardAction(detail.Board.ID, "labels") } class="grid gap-2 sm:grid-cols-[1fr_150px_auto]">
+					@CSRFInput()
 					<input aria-label="ラベル名" class="input" type="text" name="name" placeholder="ラベル名" required/>
 					<select aria-label="ラベル色" class="select" name="color" required>
 						<option value="green">Green</option>
@@ -176,6 +179,7 @@ templ ListColumn(list store.List, labels []store.Label) {
 			<div class="flex items-center gap-2">
 				<button type="button" x-sort:handle class="btn-sm-outline shrink-0">移動</button>
 				<form hx-post={ listAction(list.ID, "rename") } hx-target="#board-lists" hx-select="#board-lists" hx-swap="outerHTML" hx-trigger="keyup[key=='Enter'] from:input, blur from:input" class="form min-w-0 flex-1">
+					@CSRFInput()
 					<input aria-label="リスト名" class="input h-9 font-semibold" type="text" name="title" value={ list.Title } required/>
 				</form>
 				<button type="button" x-sort:ignore class="btn-sm-destructive shrink-0" data-dialog={ listDialogID(list.ID) } onclick="document.getElementById(this.dataset.dialog).showModal()">削除</button>
@@ -189,6 +193,7 @@ templ ListColumn(list store.List, labels []store.Label) {
 		<div x-data="{ adding: false }" x-on:keydown.escape="adding = false" class="border-t border-zinc-200 p-3">
 			<button type="button" x-show="!adding" class="btn-outline w-full" x-on:click="adding = true; $nextTick(() => $refs.cardTitle.focus())">カードを追加</button>
 			<form x-cloak x-show="adding" hx-post={ listCardsAction(list.ID) } class="form grid gap-2">
+				@CSRFInput()
 				<input x-ref="cardTitle" aria-label="新しいカード" class="input" type="text" name="title" placeholder="新しいカード" required/>
 				<div class="flex gap-2">
 					<button type="submit" class="btn">追加</button>
@@ -273,6 +278,7 @@ templ CardDetailArticle(card store.Card, labels []store.Label, archived bool, er
 		<div class="grid gap-8 py-6 lg:grid-cols-[minmax(0,1fr)_320px] xl:grid-cols-[minmax(0,1fr)_340px]">
 			<div class="space-y-8">
 				<form hx-post={ cardAction(card.ID, "update") } class="form grid gap-4">
+					@CSRFInput()
 					<span class="label">タイトル</span>
 					<input aria-label="タイトル" class="input" type="text" name="title" value={ card.Title } required/>
 					<span class="label">説明</span>
@@ -285,6 +291,7 @@ templ CardDetailArticle(card store.Card, labels []store.Label, archived bool, er
 						<p class="text-sm text-zinc-600">ボード上部のラベル管理からラベルを作成できます。</p>
 					} else {
 						<form hx-post={ cardAction(card.ID, "labels") } class="form space-y-3">
+							@CSRFInput()
 							<div class="flex flex-wrap gap-2">
 				for _, label := range labels {
 					<label class="inline-flex items-center gap-2 rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm">
@@ -317,6 +324,7 @@ templ CardDetailArticle(card store.Card, labels []store.Label, archived bool, er
 									<section class="grid gap-2">
 									for _, item := range checklist.Items {
 										<form hx-post={ checklistToggleAction(card.ID, item.ID) } class="flex items-center gap-2">
+											@CSRFInput()
 											if item.CheckedAt.Valid {
 												<input type="hidden" name="checked" value="false"/>
 													<button type="submit" class="btn-sm-outline size-5 shrink-0 border-green-500 bg-green-500 p-0 text-xs text-white" aria-label="未完了に戻す">✓</button>
@@ -332,6 +340,7 @@ templ CardDetailArticle(card store.Card, labels []store.Label, archived bool, er
 								}
 								<footer>
 									<form hx-post={ checklistItemsAction(card.ID, checklist.ID) } class="form flex gap-2">
+										@CSRFInput()
 										<input aria-label="チェック項目" class="input" type="text" name="title" placeholder="項目を追加" required/>
 										<button type="submit" class="btn-outline whitespace-nowrap">追加</button>
 									</form>
@@ -339,6 +348,7 @@ templ CardDetailArticle(card store.Card, labels []store.Label, archived bool, er
 							</div>
 					}
 					<form hx-post={ cardAction(card.ID, "checklists") } class="form flex gap-2">
+						@CSRFInput()
 						<input aria-label="チェックリスト名" class="input" type="text" name="title" placeholder="チェックリスト名" required/>
 						<button type="submit" class="btn-outline whitespace-nowrap">作成</button>
 					</form>
@@ -346,6 +356,7 @@ templ CardDetailArticle(card store.Card, labels []store.Label, archived bool, er
 				<section class="space-y-4">
 					<h3 class="text-sm font-semibold text-zinc-700">コメント</h3>
 					<form hx-post={ cardAction(card.ID, "comments") } class="form grid gap-2">
+						@CSRFInput()
 						<textarea aria-label="コメント" class="textarea min-h-28" name="body" placeholder="コメントを書く" required></textarea>
 						<button type="submit" class="btn-outline w-fit">コメントを追加</button>
 					</form>
@@ -369,14 +380,17 @@ templ CardDetailArticle(card store.Card, labels []store.Label, archived bool, er
 				<section class="space-y-4">
 					<h3 class="text-sm font-semibold text-zinc-700">添付リンク</h3>
 					<form hx-post={ cardAction(card.ID, "attachments") } class="form grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+						@CSRFInput()
 						<input aria-label="リンク名" class="input" type="text" name="title" placeholder="リンク名" required/>
 						<input aria-label="URL" class="input" type="url" name="url" placeholder="https://example.com" required/>
 						<button type="submit" class="btn-outline whitespace-nowrap">追加</button>
 					</form>
 					for _, attachment := range card.Attachments {
-						<a href={ templ.SafeURL(attachment.URL) } target="_blank" rel="noreferrer" class="card block text-sm font-medium text-zinc-800 hover:border-zinc-300">
-							<section>{ attachment.Title }</section>
-						</a>
+						if safeURL, ok := attachmentURL(attachment.URL); ok {
+							<a href={ safeURL } target="_blank" rel="noreferrer" class="card block text-sm font-medium text-zinc-800 hover:border-zinc-300">
+								<section>{ attachment.Title }</section>
+							</a>
+						}
 					}
 				</section>
 				<section class="space-y-4">
@@ -397,6 +411,7 @@ templ CardDetailArticle(card store.Card, labels []store.Label, archived bool, er
 			</div>
 			<aside class="space-y-5 rounded-md border border-zinc-200 bg-zinc-50 p-4 lg:sticky lg:top-6 lg:self-start">
 				<form hx-post={ cardAction(card.ID, "dates") } class="form grid gap-4">
+					@CSRFInput()
 					<span class="label">開始日</span>
 					<input aria-label="開始日" class="input" type="date" name="start_at" value={ startDateInput(card) }/>
 					<span class="label">期限</span>
@@ -419,6 +434,7 @@ templ CardDetailArticle(card store.Card, labels []store.Label, archived bool, er
 					<p class={ dueBadgeClass(card) }>日付: { cardDateText(card) }</p>
 				}
 				<form hx-post={ cardAction(card.ID, "complete") }>
+					@CSRFInput()
 					if card.CompletedAt.Valid {
 						<input type="hidden" name="complete" value="false"/>
 						<button type="submit" class="btn-outline w-full">未完了に戻す</button>
@@ -429,11 +445,13 @@ templ CardDetailArticle(card store.Card, labels []store.Label, archived bool, er
 				</form>
 				if archived {
 					<form action={ cardAction(card.ID, "restore") } method="post">
+						@CSRFInput()
 						<input type="hidden" name="return_to" value="archive"/>
 						<button type="submit" class="btn w-full">復元</button>
 					</form>
 				} else {
 					<form action={ cardAction(card.ID, "archive") } method="post">
+						@CSRFInput()
 						<button type="submit" class="btn-outline w-full">アーカイブ</button>
 					</form>
 				}
@@ -454,6 +472,7 @@ templ DeleteBoardDialog(board store.Board) {
 			<footer>
 				<button type="button" class="btn-outline" data-dialog={ boardDialogID(board.ID) } onclick="document.getElementById(this.dataset.dialog).close()">キャンセル</button>
 				<form action={ boardAction(board.ID, "delete") } method="post">
+					@CSRFInput()
 					<button type="submit" class="btn-destructive">削除</button>
 				</form>
 			</footer>
@@ -471,6 +490,7 @@ templ DeleteListDialog(list store.List) {
 			<footer>
 				<button type="button" class="btn-outline" data-dialog={ listDialogID(list.ID) } onclick="document.getElementById(this.dataset.dialog).close()">キャンセル</button>
 				<form action={ listAction(list.ID, "delete") } method="post">
+					@CSRFInput()
 					<button type="submit" class="btn-destructive">削除</button>
 				</form>
 			</footer>
@@ -488,6 +508,7 @@ templ DeleteCardDialog(card store.Card, archived bool) {
 			<footer>
 				<button type="button" class="btn-outline" data-dialog={ cardDeleteDialogID(card.ID) } onclick="document.getElementById(this.dataset.dialog).close()">キャンセル</button>
 				<form action={ cardAction(card.ID, "delete") } method="post">
+					@CSRFInput()
 					if archived {
 						<input type="hidden" name="return_to" value="archive"/>
 					}
@@ -561,6 +582,7 @@ templ ArchiveCardsSection(detail store.ArchiveDetail) {
 							<div class="flex flex-wrap gap-2">
 								<button type="button" class="btn-outline" data-dialog={ cardDialogID(card.ID) } onclick="document.getElementById(this.dataset.dialog).showModal()">詳細</button>
 								<form action={ cardAction(card.ID, "restore") } method="post">
+									@CSRFInput()
 									<input type="hidden" name="return_to" value="archive"/>
 									<button type="submit" class="btn">復元</button>
 								</form>

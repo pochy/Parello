@@ -204,6 +204,7 @@ templ TimelineUnscheduled(detail store.TimelineDetail) {
 								</section>
 								<footer>
 									<form hx-post={ cardAction(card.ID, "dates") } hx-swap="none" class="form grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+										@CSRFInput()
 										<input aria-label="開始日" class="input" type="date" name="start_at" required/>
 										<input aria-label="期限" class="input" type="date" name="due_at" required/>
 										<input type="hidden" name="cover_color" value={ card.CoverColor }/>

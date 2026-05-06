@@ -15,6 +15,7 @@ templ BoardsContent(boards []store.Board, pageError string) {
 				<p class="max-w-2xl text-pretty text-sm text-zinc-600">ローカルで使うシンプルなカンバンボードです。</p>
 			</div>
 			<form action="/boards" method="post" class="form flex w-full flex-col gap-2 sm:w-96">
+				@CSRFInput()
 				<label for="board-title" class="label">新しいボード</label>
 				<div class="flex items-center gap-2">
 					<input id="board-title" class="input" type="text" name="title" placeholder="例: プロダクト開発" required/>
