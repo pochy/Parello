@@ -1,1 +1,6 @@
 .claude/settings.local.json
+storybook-server/node_modules/
+storybook-server/stories/
+storybook-server/storybook-static/
+storybook-server/.storybook/preview-head.html
+storybook-server/.storybook/preview.js
