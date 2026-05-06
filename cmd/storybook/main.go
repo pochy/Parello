@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -22,6 +23,14 @@ func main() {
 		storybook.WithServerAddr(env("STORYBOOK_ADDR", ":60606")),
 		storybook.WithHeader(storybookHeader()),
 	)
+	storybookStaticHandler := sb.StaticHandler
+	sb.StaticHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/static/") {
+			http.StripPrefix("/static/", http.FileServer(http.Dir("static"))).ServeHTTP(w, r)
+			return
+		}
+		storybookStaticHandler.ServeHTTP(w, r)
+	})
 
 	sb.AddComponent(
 		"BoardsContent",
@@ -322,12 +331,12 @@ func storybookHeader() string {
 	appCSS := strings.ReplaceAll(string(css), "</style", "<\\/style")
 	return fmt.Sprintf(`
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.2.4" integrity="sha384-yNSZBFvuOWcmww494a9+1zNuvgUGEXoWkein7cxP8wHUTi3iXCU4vJ7hr3tzBCml" crossorigin="anonymous"></script>
-<script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.10/dist/htmx.min.js" integrity="sha384-H5SrcfygHmAuTDZphMHqBJLc3FhssKjG7w/CeCpFReSfwBWDTKpkzPP8c+cLsK+V" crossorigin="anonymous"></script>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/basecoat-css@0.3.11/dist/basecoat.cdn.min.css" integrity="sha384-3bN4bCwXgp6P9s9cIM3i9Zl2378Fmumumov4whqgzPqYHuNx0fKoEqqd322RU40c" crossorigin="anonymous">
-<script src="https://cdn.jsdelivr.net/npm/basecoat-css@0.3.11/dist/js/all.min.js" integrity="sha384-Nh+vuYF6cR32jKYrKMif2BIAyNAYtifVdaSvCBc2IheqqAAuNII7/hWSWy6dIdmr" crossorigin="anonymous" defer></script>
-<script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/sort@3.15.12/dist/cdn.min.js" integrity="sha384-hqiYD2WaUm+VsLVKEqRzzkJ7HQownCb0Mjq/GQJUDyzwA+vztNBwFqsWkbRGZCv+" crossorigin="anonymous"></script>
-<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.15.12/dist/cdn.min.js" integrity="sha384-pb6hrQvo4s23cEUFtj0CZkzGE3jyK3pj26RIupXXxhSrrcUA/Cn0lZgcCrGH0t6L" crossorigin="anonymous"></script>
+<script src="/static/vendor/tailwindcss-browser-4.2.4.js"></script>
+<script src="/static/vendor/htmx-2.0.10.min.js"></script>
+<link rel="stylesheet" href="/static/vendor/basecoat-0.3.11.min.css">
+<script src="/static/vendor/basecoat-0.3.11.all.min.js" defer></script>
+<script defer src="/static/vendor/alpine-sort-3.15.12.min.js"></script>
+<script defer src="/static/vendor/alpine-3.15.12.min.js"></script>
 <style>%s</style>`, appCSS)
 }
 
