@@ -84,6 +84,7 @@ func New(data DataStore) http.Handler {
 	mux.HandleFunc("POST /cards/{cardID}/checklists", app.createChecklist)
 	mux.HandleFunc("POST /cards/{cardID}/checklists/{checklistID}/items", app.createChecklistItem)
 	mux.HandleFunc("POST /cards/{cardID}/checklist-items/{itemID}/toggle", app.toggleChecklistItem)
+	mux.HandleFunc("GET /cards/{cardID}/activities", app.cardActivities)
 	mux.HandleFunc("PATCH /api/lists/reorder", app.reorderLists)
 	mux.HandleFunc("PATCH /api/cards/reorder", app.reorderCards)
 	mux.HandleFunc("PATCH /api/cards/{cardID}/timeline", app.updateCardTimeline)
@@ -826,6 +827,30 @@ func (a *App) renderCardAttachmentsSection(w http.ResponseWriter, r *http.Reques
 	render(w, r, view.CardAttachmentsSection(card))
 }
 
+func (a *App) cardActivities(w http.ResponseWriter, r *http.Request) {
+	cardID, ok := pathID(w, r, "cardID")
+	if !ok {
+		return
+	}
+	boardID, err := a.store.BoardIDForCard(r.Context(), cardID)
+	if err != nil {
+		handleHTMLStoreError(w, r, err, "/boards")
+		return
+	}
+	card, err := a.loadCardForActivity(r, boardID, cardID)
+	if err != nil {
+		handleHTMLStoreError(w, r, err, boardURL(boardID))
+		return
+	}
+	page := 1
+	if rawPage := r.URL.Query().Get("page"); rawPage != "" {
+		if parsed, err := strconv.Atoi(rawPage); err == nil && parsed > 0 {
+			page = parsed
+		}
+	}
+	render(w, r, view.CardActivitySection(card, page))
+}
+
 func (a *App) renderCardMetaSection(w http.ResponseWriter, r *http.Request, boardID int64, cardID int64) {
 	card, _, err := a.loadCardFromBoard(r, boardID, cardID)
 	if err != nil {
@@ -853,6 +878,25 @@ func (a *App) loadCardFromBoard(r *http.Request, boardID int64, cardID int64) (s
 		detail = unfiltered
 	}
 	return card, detail.Labels, nil
+}
+
+func (a *App) loadCardForActivity(r *http.Request, boardID int64, cardID int64) (store.Card, error) {
+	card, _, err := a.loadCardFromBoard(r, boardID, cardID)
+	if err == nil {
+		return card, nil
+	}
+	if !errors.Is(err, store.ErrNotFound) {
+		return store.Card{}, err
+	}
+	detail, err := a.store.GetArchiveDetail(r.Context(), boardID)
+	if err != nil {
+		return store.Card{}, err
+	}
+	card, ok := findArchiveCard(detail, cardID)
+	if !ok {
+		return store.Card{}, store.ErrNotFound
+	}
+	return card, nil
 }
 
 func isArchiveCurrentURL(r *http.Request, boardID int64) bool {

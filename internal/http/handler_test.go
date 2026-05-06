@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -369,6 +370,24 @@ func TestBoardRefreshHTMXUsesCurrentURLFilter(t *testing.T) {
 	}
 }
 
+func TestCardActivitiesHTMXRendersRequestedPage(t *testing.T) {
+	detail := testBoardDetail()
+	detail.Lists[0].Cards[0].Activities = activityEvents(12)
+	req := httptest.NewRequest(http.MethodGet, "/cards/9/activities?page=2", nil)
+	req.Header.Set("HX-Request", "true")
+	rec := httptest.NewRecorder()
+	fake := &fakeStore{boardDetail: detail}
+
+	New(fake).ServeHTTP(rec, req)
+
+	assertStatus(t, rec, http.StatusOK)
+	body := rec.Body.String()
+	assertContains(t, body, `data-card-activity-section`, `2/2`, `Event 11`, `Event 12`, `hx-get="/cards/9/activities?page=1"`)
+	if strings.Contains(body, "Event 10") {
+		t.Fatalf("second activity page contains previous page event: %s", body)
+	}
+}
+
 func TestReorderListsJSON(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPatch, "/api/lists/reorder", bytes.NewBufferString(`{"boardId":7,"listIds":[3,1,2]}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -616,6 +635,29 @@ func testBoardDetail() store.BoardDetail {
 		},
 		Labels: []store.Label{{ID: 5, BoardID: 7, Name: "Bug", Color: "red"}},
 	}
+}
+
+func activityEvents(count int) []store.ActivityEvent {
+	events := make([]store.ActivityEvent, 0, count)
+	base := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
+	for i := 1; i <= count; i++ {
+		events = append(events, store.ActivityEvent{
+			ID:        int64(i),
+			BoardID:   7,
+			CardID:    sql.NullInt64{Int64: 9, Valid: true},
+			EventType: "test",
+			Message:   "Event " + twoDigit(i),
+			CreatedAt: base.Add(-time.Duration(i) * time.Minute),
+		})
+	}
+	return events
+}
+
+func twoDigit(value int) string {
+	if value < 10 {
+		return "0" + strconv.Itoa(value)
+	}
+	return strconv.Itoa(value)
 }
 
 type fakeStore struct {

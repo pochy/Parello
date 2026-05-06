@@ -171,6 +171,46 @@ func TestCardAttachmentsSectionRendersFormAndLinks(t *testing.T) {
 	assertTextContains(t, doc.Find(`[data-card-attachments-section]`).Text(), "添付リンク", "Spec")
 }
 
+func TestCardActivitySectionPaginatesTenEvents(t *testing.T) {
+	card := store.Card{
+		ID:         9,
+		Title:      "Activity card",
+		Activities: testActivities(12),
+	}
+
+	doc := renderComponent(t, CardActivitySection(card, 1))
+
+	assertSelectionLength(t, doc, `[data-card-activity-section]`, 1)
+	assertSelectionLength(t, doc, `[data-card-activity-section] p`, 10)
+	assertTextContains(t, doc.Find(`[data-card-activity-section]`).Text(), "アクティビティ", "1/2", "Event 01", "Event 10", "次のページ")
+	if strings.Contains(doc.Find(`[data-card-activity-section]`).Text(), "Event 11") {
+		t.Fatalf("first activity page contains event from next page")
+	}
+	assertSelectionLength(t, doc, `button[hx-get="/cards/9/activities?page=2"][hx-target="closest [data-card-activity-section]"]`, 1)
+
+	doc = renderComponent(t, CardActivitySection(card, 2))
+
+	assertSelectionLength(t, doc, `[data-card-activity-section] p`, 2)
+	assertTextContains(t, doc.Find(`[data-card-activity-section]`).Text(), "2/2", "Event 11", "Event 12", "前のページ")
+	assertSelectionLength(t, doc, `button[hx-get="/cards/9/activities?page=1"][hx-target="closest [data-card-activity-section]"]`, 1)
+}
+
+func testActivities(count int) []store.ActivityEvent {
+	events := make([]store.ActivityEvent, 0, count)
+	base := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
+	for i := 1; i <= count; i++ {
+		events = append(events, store.ActivityEvent{
+			ID:        int64(i),
+			BoardID:   7,
+			CardID:    sql.NullInt64{Int64: 9, Valid: true},
+			EventType: "test",
+			Message:   "Event " + idString(int64(i/10)) + idString(int64(i%10)),
+			CreatedAt: base.Add(-time.Duration(i) * time.Minute),
+		})
+	}
+	return events
+}
+
 func renderComponent(t *testing.T, component templ.Component) *goquery.Document {
 	t.Helper()
 

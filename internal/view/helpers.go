@@ -76,6 +76,10 @@ func cardAction(id int64, action string) templ.SafeURL {
 	return templ.SafeURL(fmt.Sprintf("/cards/%d/%s", id, action))
 }
 
+func cardActivitiesURL(id int64, page int) templ.SafeURL {
+	return templ.SafeURL(fmt.Sprintf("/cards/%d/activities?page=%d", id, normalizedActivityPage(page)))
+}
+
 func attachmentURL(rawURL string) (templ.SafeURL, bool) {
 	parsed, err := url.ParseRequestURI(rawURL)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
@@ -211,6 +215,44 @@ func checklistProgress(card store.Card) string {
 		return ""
 	}
 	return fmt.Sprintf("%d/%d", card.ChecklistCompleted, card.ChecklistTotal)
+}
+
+const cardActivityPageSize = 10
+
+func normalizedActivityPage(page int) int {
+	if page < 1 {
+		return 1
+	}
+	return page
+}
+
+func activityPageCount(card store.Card) int {
+	if len(card.Activities) == 0 {
+		return 1
+	}
+	return (len(card.Activities) + cardActivityPageSize - 1) / cardActivityPageSize
+}
+
+func activityPageNumber(card store.Card, page int) int {
+	page = normalizedActivityPage(page)
+	total := activityPageCount(card)
+	if page > total {
+		return total
+	}
+	return page
+}
+
+func visibleActivities(card store.Card, page int) []store.ActivityEvent {
+	page = activityPageNumber(card, page)
+	start := (page - 1) * cardActivityPageSize
+	if start >= len(card.Activities) {
+		return nil
+	}
+	end := start + cardActivityPageSize
+	if end > len(card.Activities) {
+		end = len(card.Activities)
+	}
+	return card.Activities[start:end]
 }
 
 func labelClass(color string) string {

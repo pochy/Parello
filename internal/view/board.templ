@@ -354,21 +354,7 @@ templ CardDetailArticle(card store.Card, labels []store.Label, archived bool, er
 						}
 					}
 				</section>
-				<section class="space-y-4">
-					<h3 class="text-sm font-semibold text-zinc-700">アクティビティ</h3>
-					if len(card.Activities) == 0 {
-						<p class="text-sm text-zinc-500">履歴はまだありません。</p>
-					} else {
-						<div class="grid gap-2">
-							for _, event := range card.Activities {
-								<p class="rounded-md bg-zinc-50 px-3 py-2 text-sm text-zinc-700">
-									<span>{ event.Message }</span>
-									<span class="ml-2 tabular-nums text-zinc-500">{ dateTimeText(event.CreatedAt) }</span>
-								</p>
-							}
-						</div>
-					}
-				</section>
+				@CardActivitySection(card, 1)
 			</div>
 			<aside data-card-meta-section class="space-y-5 rounded-md border border-zinc-200 bg-zinc-50 p-4 lg:sticky lg:top-6 lg:self-start">
 				<form hx-post={ cardAction(card.ID, "dates") } hx-target="closest [data-card-meta-section]" hx-swap="outerHTML" class="form grid gap-4">
@@ -421,6 +407,53 @@ templ CardDetailArticle(card store.Card, labels []store.Label, archived bool, er
 			</aside>
 		</div>
 	</article>
+}
+
+templ CardActivitySection(card store.Card, page int) {
+	<section data-card-activity-section class="space-y-4">
+		<div class="flex items-center justify-between gap-3">
+			<h3 class="text-sm font-semibold text-zinc-700">アクティビティ</h3>
+			if len(card.Activities) > 0 {
+				<span class="text-xs tabular-nums text-zinc-500">{ intString(activityPageNumber(card, page)) }/{ intString(activityPageCount(card)) }</span>
+			}
+		</div>
+		if len(card.Activities) == 0 {
+			<p class="text-sm text-zinc-500">履歴はまだありません。</p>
+		} else {
+			<div class="grid gap-2">
+				for _, event := range visibleActivities(card, page) {
+					<p class="rounded-md bg-zinc-50 px-3 py-2 text-sm text-zinc-700">
+						<span>{ event.Message }</span>
+						<span class="ml-2 tabular-nums text-zinc-500">{ dateTimeText(event.CreatedAt) }</span>
+					</p>
+				}
+			</div>
+			if activityPageCount(card) > 1 {
+				<nav class="flex items-center justify-between gap-3" aria-label="アクティビティページ">
+					if activityPageNumber(card, page) > 1 {
+						<button
+							type="button"
+							class="btn-sm-outline"
+							hx-get={ cardActivitiesURL(card.ID, activityPageNumber(card, page) - 1) }
+							hx-target="closest [data-card-activity-section]"
+							hx-swap="outerHTML"
+						>前のページ</button>
+					} else {
+						<span></span>
+					}
+					if activityPageNumber(card, page) < activityPageCount(card) {
+						<button
+							type="button"
+							class="btn-sm-outline"
+							hx-get={ cardActivitiesURL(card.ID, activityPageNumber(card, page) + 1) }
+							hx-target="closest [data-card-activity-section]"
+							hx-swap="outerHTML"
+						>次のページ</button>
+					}
+				</nav>
+			}
+		}
+	</section>
 }
 
 templ CardChecklistSection(card store.Card) {
