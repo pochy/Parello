@@ -29,72 +29,8 @@ document.addEventListener('alpine:init', () => {
 		dayCount,
 		cellWidth,
 		timelineError: '',
-		cardError: '',
 		activeDrag: null,
 		suppressClick: false,
-		replaceCardFragments(dialog, nextDialog, fragments) {
-			for (const fragment of fragments) {
-				const current = dialog.querySelector(`[data-card-fragment="${fragment}"]`);
-				const next = nextDialog.querySelector(`[data-card-fragment="${fragment}"]`);
-				if (!current || !next) {
-					continue;
-				}
-				Alpine.mutateDom(() => {
-					current.outerHTML = next.outerHTML;
-				});
-				shared.initTree(dialog.querySelector(`[data-card-fragment="${fragment}"]`));
-			}
-		},
-		replaceTimelineCard(cardId, doc) {
-			const current = document.querySelector(`[data-timeline-card][data-card-id="${cardId}"]`);
-			const next = doc.querySelector(`[data-timeline-card][data-card-id="${cardId}"]`);
-			if (!current || !next) {
-				return;
-			}
-			Alpine.mutateDom(() => {
-				current.outerHTML = next.outerHTML;
-			});
-			shared.initTree(document.querySelector(`[data-timeline-card][data-card-id="${cardId}"]`));
-		},
-		async submitCardForm(event) {
-			const form = event.target;
-			const dialog = form.closest('dialog[id^="card-"]');
-			const cardId = shared.cardIDFromDialog(dialog);
-			if (!dialog || !cardId) {
-				return;
-			}
-			this.cardError = '';
-			form.setAttribute('aria-busy', 'true');
-			try {
-				const result = await shared.fetchFormHTML(form, event.submitter);
-				if (result.errorCode) {
-					this.cardError = shared.cardFormErrorMessage(result.errorCode);
-					return;
-				}
-				const nextDialog = result.doc.getElementById(dialog.id);
-				if (!nextDialog) {
-					this.cardError = '更新後のカードを読み込めませんでした。ページを再読み込みしてください。';
-					return;
-				}
-				const scroller = dialog.querySelector('article');
-				const scrollTop = scroller ? scroller.scrollTop : 0;
-				const fragments = (form.dataset.refreshFragments || form.closest('[data-card-fragment]')?.dataset.cardFragment || '')
-					.split(/\s+/)
-					.filter(Boolean);
-				this.replaceCardFragments(dialog, nextDialog, [...new Set(fragments)]);
-				this.replaceTimelineCard(cardId, result.doc);
-				this.$nextTick(() => {
-					const updatedScroller = dialog.querySelector('article');
-					if (updatedScroller) {
-						updatedScroller.scrollTop = Math.min(scrollTop, updatedScroller.scrollHeight);
-					}
-				});
-			} catch (error) {
-				this.cardError = '通信に失敗しました。ネットワークとサーバーを確認してください。';
-			} finally {
-				form.removeAttribute('aria-busy');
-			}
-		},
 		openCard(event, dialogId) {
 			if (this.suppressClick) {
 				event.preventDefault();

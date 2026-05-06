@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -81,8 +82,8 @@ func New(data DataStore) http.Handler {
 	mux.HandleFunc("POST /cards/{cardID}/comments", app.addComment)
 	mux.HandleFunc("POST /cards/{cardID}/attachments", app.addAttachment)
 	mux.HandleFunc("POST /cards/{cardID}/checklists", app.createChecklist)
-	mux.HandleFunc("POST /checklists/{checklistID}/items", app.createChecklistItem)
-	mux.HandleFunc("POST /checklist-items/{itemID}/toggle", app.toggleChecklistItem)
+	mux.HandleFunc("POST /cards/{cardID}/checklists/{checklistID}/items", app.createChecklistItem)
+	mux.HandleFunc("POST /cards/{cardID}/checklist-items/{itemID}/toggle", app.toggleChecklistItem)
 	mux.HandleFunc("PATCH /api/lists/reorder", app.reorderLists)
 	mux.HandleFunc("PATCH /api/cards/reorder", app.reorderCards)
 	mux.HandleFunc("PATCH /api/cards/{cardID}/timeline", app.updateCardTimeline)
@@ -105,10 +106,11 @@ func (a *App) boardsIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) createBoard(w http.ResponseWriter, r *http.Request) {
-	title, ok := formTitle(w, r)
-	if !ok {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
 		return
 	}
+	title := strings.TrimSpace(r.FormValue("title"))
 	if title == "" {
 		redirectWithError(w, r, "/boards", "board_title_required")
 		return
@@ -127,7 +129,7 @@ func (a *App) boardShow(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	detail, err := a.store.GetBoardDetail(r.Context(), boardID, filterFromQuery(r))
+	detail, err := a.store.GetBoardDetail(r.Context(), boardID, filterFromRenderRequest(r))
 	if err != nil {
 		handleHTMLStoreError(w, r, err, "/boards")
 		return
@@ -153,7 +155,7 @@ func (a *App) boardTimeline(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	detail, err := a.store.GetTimelineDetail(r.Context(), boardID, timelineOptionsFromQuery(r))
+	detail, err := a.store.GetTimelineDetail(r.Context(), boardID, timelineOptionsFromRenderRequest(r))
 	if err != nil {
 		handleHTMLStoreError(w, r, err, "/boards")
 		return
@@ -166,20 +168,20 @@ func (a *App) renameBoard(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	redirectURL := boardURL(boardID)
-	title, ok := formTitle(w, r)
-	if !ok {
+	if err := r.ParseForm(); err != nil {
+		a.renderBoardHTMX(w, r, boardID, "form_invalid")
 		return
 	}
+	title := strings.TrimSpace(r.FormValue("title"))
 	if title == "" {
-		redirectWithError(w, r, redirectURL, "board_title_required")
+		a.renderBoardHTMX(w, r, boardID, "board_title_required")
 		return
 	}
 	if err := a.store.RenameBoard(r.Context(), boardID, title); err != nil {
-		handleHTMLStoreError(w, r, err, redirectURL)
+		handleHTMLStoreError(w, r, err, boardURL(boardID))
 		return
 	}
-	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
+	a.renderBoardHTMX(w, r, boardID, "")
 }
 
 func (a *App) deleteBoard(w http.ResponseWriter, r *http.Request) {
@@ -199,20 +201,20 @@ func (a *App) createList(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	redirectURL := boardURL(boardID)
-	title, ok := formTitle(w, r)
-	if !ok {
+	if err := r.ParseForm(); err != nil {
+		a.renderBoardHTMX(w, r, boardID, "form_invalid")
 		return
 	}
+	title := strings.TrimSpace(r.FormValue("title"))
 	if title == "" {
-		redirectWithError(w, r, redirectURL, "list_title_required")
+		a.renderBoardHTMX(w, r, boardID, "list_title_required")
 		return
 	}
 	if _, err := a.store.CreateList(r.Context(), boardID, title); err != nil {
-		handleHTMLStoreError(w, r, err, redirectURL)
+		handleHTMLStoreError(w, r, err, boardURL(boardID))
 		return
 	}
-	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
+	a.renderBoardHTMX(w, r, boardID, "")
 }
 
 func (a *App) createLabel(w http.ResponseWriter, r *http.Request) {
@@ -220,22 +222,21 @@ func (a *App) createLabel(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	redirectURL := boardURL(boardID)
 	if err := r.ParseForm(); err != nil {
-		redirectWithError(w, r, redirectURL, "form_invalid")
+		a.renderBoardHTMX(w, r, boardID, "form_invalid")
 		return
 	}
 	name := strings.TrimSpace(r.FormValue("name"))
 	color := strings.TrimSpace(r.FormValue("color"))
 	if name == "" || color == "" {
-		redirectWithError(w, r, redirectURL, "label_required")
+		a.renderBoardHTMX(w, r, boardID, "label_required")
 		return
 	}
 	if err := a.store.CreateLabel(r.Context(), boardID, name, color); err != nil {
-		handleHTMLStoreError(w, r, err, redirectURL)
+		handleHTMLStoreError(w, r, err, boardURL(boardID))
 		return
 	}
-	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
+	a.renderBoardHTMX(w, r, boardID, "")
 }
 
 func (a *App) renameList(w http.ResponseWriter, r *http.Request) {
@@ -248,20 +249,20 @@ func (a *App) renameList(w http.ResponseWriter, r *http.Request) {
 		handleHTMLStoreError(w, r, err, "/boards")
 		return
 	}
-	redirectURL := boardURL(boardID)
-	title, ok := formTitle(w, r)
-	if !ok {
+	if err := r.ParseForm(); err != nil {
+		a.renderBoardHTMX(w, r, boardID, "form_invalid")
 		return
 	}
+	title := strings.TrimSpace(r.FormValue("title"))
 	if title == "" {
-		redirectWithError(w, r, redirectURL, "list_title_required")
+		a.renderBoardHTMX(w, r, boardID, "list_title_required")
 		return
 	}
 	if _, err := a.store.RenameList(r.Context(), listID, title); err != nil {
-		handleHTMLStoreError(w, r, err, redirectURL)
+		handleHTMLStoreError(w, r, err, boardURL(boardID))
 		return
 	}
-	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
+	a.renderBoardHTMX(w, r, boardID, "")
 }
 
 func (a *App) deleteList(w http.ResponseWriter, r *http.Request) {
@@ -287,20 +288,20 @@ func (a *App) createCard(w http.ResponseWriter, r *http.Request) {
 		handleHTMLStoreError(w, r, err, "/boards")
 		return
 	}
-	redirectURL := boardURL(boardID)
-	title, ok := formTitle(w, r)
-	if !ok {
+	if err := r.ParseForm(); err != nil {
+		a.renderBoardHTMX(w, r, boardID, "form_invalid")
 		return
 	}
+	title := strings.TrimSpace(r.FormValue("title"))
 	if title == "" {
-		redirectWithError(w, r, redirectURL, "card_title_required")
+		a.renderBoardHTMX(w, r, boardID, "card_title_required")
 		return
 	}
 	if _, err := a.store.CreateCard(r.Context(), listID, title); err != nil {
-		handleHTMLStoreError(w, r, err, redirectURL)
+		handleHTMLStoreError(w, r, err, boardURL(boardID))
 		return
 	}
-	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
+	a.renderBoardHTMX(w, r, boardID, "")
 }
 
 func (a *App) updateCard(w http.ResponseWriter, r *http.Request) {
@@ -313,23 +314,22 @@ func (a *App) updateCard(w http.ResponseWriter, r *http.Request) {
 		handleHTMLStoreError(w, r, err, "/boards")
 		return
 	}
-	redirectURL := boardURL(boardID)
 
 	if err := r.ParseForm(); err != nil {
-		redirectWithError(w, r, redirectURL, "form_invalid")
+		a.renderCardHTMXErrorCode(w, r, boardID, cardID, "form_invalid")
 		return
 	}
 	title := strings.TrimSpace(r.FormValue("title"))
 	description := strings.TrimSpace(r.FormValue("description"))
 	if title == "" {
-		redirectWithError(w, r, redirectURL, "card_title_required")
+		a.renderCardHTMXErrorCode(w, r, boardID, cardID, "card_title_required")
 		return
 	}
 	if _, err := a.store.UpdateCard(r.Context(), cardID, title, description); err != nil {
-		handleHTMLStoreError(w, r, err, redirectURL)
+		handleHTMLStoreError(w, r, err, boardURL(boardID))
 		return
 	}
-	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
+	a.renderCardHTMX(w, r, boardID, cardID)
 }
 
 func (a *App) updateCardDates(w http.ResponseWriter, r *http.Request) {
@@ -342,33 +342,29 @@ func (a *App) updateCardDates(w http.ResponseWriter, r *http.Request) {
 		handleHTMLStoreError(w, r, err, "/boards")
 		return
 	}
-	redirectURL := boardURL(boardID)
 	if err := r.ParseForm(); err != nil {
-		redirectWithError(w, r, redirectURL, "form_invalid")
+		a.renderCardHTMXErrorCode(w, r, boardID, cardID, "form_invalid")
 		return
 	}
 	startAt, ok := parseDate(r.FormValue("start_at"))
 	if !ok {
-		redirectWithError(w, r, redirectURL, "date_invalid")
+		a.renderCardHTMXErrorCode(w, r, boardID, cardID, "date_invalid")
 		return
 	}
-	dueAt, ok := parseDueDate(r.FormValue("due_at"))
+	dueAt, ok := parseDate(r.FormValue("due_at"))
 	if !ok {
-		redirectWithError(w, r, redirectURL, "date_invalid")
+		a.renderCardHTMXErrorCode(w, r, boardID, cardID, "date_invalid")
 		return
 	}
 	if startAt.Valid && dueAt.Valid && startAt.Time.After(dueAt.Time) {
-		redirectWithError(w, r, redirectURL, "date_invalid")
+		a.renderCardHTMXErrorCode(w, r, boardID, cardID, "date_invalid")
 		return
 	}
 	if _, err := a.store.UpdateCardDates(r.Context(), cardID, startAt, dueAt, r.FormValue("cover_color")); err != nil {
-		handleHTMLStoreError(w, r, err, redirectURL)
+		handleHTMLStoreError(w, r, err, boardURL(boardID))
 		return
 	}
-	if returnTo := safeLocalReturn(r.FormValue("return_to")); returnTo != "" {
-		redirectURL = returnTo
-	}
-	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
+	a.renderCardHTMX(w, r, boardID, cardID)
 }
 
 func (a *App) completeCard(w http.ResponseWriter, r *http.Request) {
@@ -381,16 +377,15 @@ func (a *App) completeCard(w http.ResponseWriter, r *http.Request) {
 		handleHTMLStoreError(w, r, err, "/boards")
 		return
 	}
-	redirectURL := boardURL(boardID)
 	if err := r.ParseForm(); err != nil {
-		redirectWithError(w, r, redirectURL, "form_invalid")
+		a.renderCardHTMXErrorCode(w, r, boardID, cardID, "form_invalid")
 		return
 	}
 	if _, err := a.store.SetCardComplete(r.Context(), cardID, parseBool(r.FormValue("complete"))); err != nil {
-		handleHTMLStoreError(w, r, err, redirectURL)
+		handleHTMLStoreError(w, r, err, boardURL(boardID))
 		return
 	}
-	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
+	a.renderCardHTMX(w, r, boardID, cardID)
 }
 
 func (a *App) archiveCard(w http.ResponseWriter, r *http.Request) {
@@ -450,21 +445,20 @@ func (a *App) setCardLabels(w http.ResponseWriter, r *http.Request) {
 		handleHTMLStoreError(w, r, err, "/boards")
 		return
 	}
-	redirectURL := boardURL(boardID)
 	if err := r.ParseForm(); err != nil {
-		redirectWithError(w, r, redirectURL, "form_invalid")
+		a.renderCardHTMXErrorCode(w, r, boardID, cardID, "form_invalid")
 		return
 	}
 	labelIDs, ok := parseInt64List(r.Form["label_id"])
 	if !ok {
-		redirectWithError(w, r, redirectURL, "invalid_input")
+		a.renderCardHTMXErrorCode(w, r, boardID, cardID, "invalid_input")
 		return
 	}
 	if _, err := a.store.SetCardLabels(r.Context(), cardID, labelIDs); err != nil {
-		handleHTMLStoreError(w, r, err, redirectURL)
+		handleHTMLStoreError(w, r, err, boardURL(boardID))
 		return
 	}
-	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
+	a.renderCardHTMX(w, r, boardID, cardID)
 }
 
 func (a *App) addComment(w http.ResponseWriter, r *http.Request) {
@@ -477,16 +471,19 @@ func (a *App) addComment(w http.ResponseWriter, r *http.Request) {
 		handleHTMLStoreError(w, r, err, "/boards")
 		return
 	}
-	redirectURL := boardURL(boardID)
 	if err := r.ParseForm(); err != nil {
-		redirectWithError(w, r, redirectURL, "form_invalid")
+		a.renderCardHTMXErrorCode(w, r, boardID, cardID, "form_invalid")
+		return
+	}
+	if strings.TrimSpace(r.FormValue("body")) == "" {
+		a.renderCardHTMXErrorCode(w, r, boardID, cardID, "comment_required")
 		return
 	}
 	if _, err := a.store.AddComment(r.Context(), cardID, r.FormValue("body")); err != nil {
-		handleHTMLStoreError(w, r, err, redirectURL)
+		handleHTMLStoreError(w, r, err, boardURL(boardID))
 		return
 	}
-	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
+	a.renderCardHTMX(w, r, boardID, cardID)
 }
 
 func (a *App) addAttachment(w http.ResponseWriter, r *http.Request) {
@@ -499,16 +496,19 @@ func (a *App) addAttachment(w http.ResponseWriter, r *http.Request) {
 		handleHTMLStoreError(w, r, err, "/boards")
 		return
 	}
-	redirectURL := boardURL(boardID)
 	if err := r.ParseForm(); err != nil {
-		redirectWithError(w, r, redirectURL, "form_invalid")
+		a.renderCardHTMXErrorCode(w, r, boardID, cardID, "form_invalid")
+		return
+	}
+	if strings.TrimSpace(r.FormValue("title")) == "" || strings.TrimSpace(r.FormValue("url")) == "" {
+		a.renderCardHTMXErrorCode(w, r, boardID, cardID, "attachment_required")
 		return
 	}
 	if _, err := a.store.AddAttachment(r.Context(), cardID, r.FormValue("title"), r.FormValue("url")); err != nil {
-		handleHTMLStoreError(w, r, err, redirectURL)
+		handleHTMLStoreError(w, r, err, boardURL(boardID))
 		return
 	}
-	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
+	a.renderCardHTMX(w, r, boardID, cardID)
 }
 
 func (a *App) createChecklist(w http.ResponseWriter, r *http.Request) {
@@ -521,54 +521,77 @@ func (a *App) createChecklist(w http.ResponseWriter, r *http.Request) {
 		handleHTMLStoreError(w, r, err, "/boards")
 		return
 	}
-	redirectURL := boardURL(boardID)
-	title, ok := formTitle(w, r)
-	if !ok {
+	if err := r.ParseForm(); err != nil {
+		a.renderCardHTMXErrorCode(w, r, boardID, cardID, "form_invalid")
 		return
 	}
+	title := strings.TrimSpace(r.FormValue("title"))
 	if title == "" {
-		redirectWithError(w, r, redirectURL, "checklist_required")
+		a.renderCardHTMXErrorCode(w, r, boardID, cardID, "checklist_required")
 		return
 	}
 	if _, err := a.store.CreateChecklist(r.Context(), cardID, title); err != nil {
-		handleHTMLStoreError(w, r, err, redirectURL)
+		handleHTMLStoreError(w, r, err, boardURL(boardID))
 		return
 	}
-	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
+	a.renderCardHTMX(w, r, boardID, cardID)
 }
 
 func (a *App) createChecklistItem(w http.ResponseWriter, r *http.Request) {
+	cardID, ok := pathID(w, r, "cardID")
+	if !ok {
+		return
+	}
 	checklistID, ok := pathID(w, r, "checklistID")
 	if !ok {
 		return
 	}
-	title, ok := formTitle(w, r)
-	if !ok {
-		return
-	}
-	boardID, err := a.store.CreateChecklistItem(r.Context(), checklistID, title)
+	boardID, err := a.store.BoardIDForCard(r.Context(), cardID)
 	if err != nil {
 		handleHTMLStoreError(w, r, err, "/boards")
 		return
 	}
-	http.Redirect(w, r, boardURL(boardID), http.StatusSeeOther)
+	if err := r.ParseForm(); err != nil {
+		a.renderCardHTMXErrorCode(w, r, boardID, cardID, "form_invalid")
+		return
+	}
+	title := strings.TrimSpace(r.FormValue("title"))
+	if title == "" {
+		a.renderCardHTMXErrorCode(w, r, boardID, cardID, "invalid_input")
+		return
+	}
+	boardID, err = a.store.CreateChecklistItem(r.Context(), checklistID, title)
+	if err != nil {
+		handleHTMLStoreError(w, r, err, "/boards")
+		return
+	}
+	a.renderCardHTMX(w, r, boardID, cardID)
 }
 
 func (a *App) toggleChecklistItem(w http.ResponseWriter, r *http.Request) {
+	cardID, ok := pathID(w, r, "cardID")
+	if !ok {
+		return
+	}
 	itemID, ok := pathID(w, r, "itemID")
 	if !ok {
 		return
 	}
-	if err := r.ParseForm(); err != nil {
-		redirectWithError(w, r, "/boards", "form_invalid")
-		return
-	}
-	boardID, _, err := a.store.ToggleChecklistItem(r.Context(), itemID, parseBool(r.FormValue("checked")))
+	boardID, err := a.store.BoardIDForCard(r.Context(), cardID)
 	if err != nil {
 		handleHTMLStoreError(w, r, err, "/boards")
 		return
 	}
-	http.Redirect(w, r, boardURL(boardID), http.StatusSeeOther)
+	if err := r.ParseForm(); err != nil {
+		a.renderCardHTMXErrorCode(w, r, boardID, cardID, "form_invalid")
+		return
+	}
+	boardID, _, err = a.store.ToggleChecklistItem(r.Context(), itemID, parseBool(r.FormValue("checked")))
+	if err != nil {
+		handleHTMLStoreError(w, r, err, "/boards")
+		return
+	}
+	a.renderCardHTMX(w, r, boardID, cardID)
 }
 
 func (a *App) reorderLists(w http.ResponseWriter, r *http.Request) {
@@ -674,12 +697,103 @@ func render(w http.ResponseWriter, r *http.Request, component templ.Component) {
 	}
 }
 
-func formTitle(w http.ResponseWriter, r *http.Request) (string, bool) {
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "invalid form", http.StatusBadRequest)
-		return "", false
+func isHTMX(r *http.Request) bool {
+	return r.Header.Get("HX-Request") == "true"
+}
+
+func (a *App) renderBoardHTMX(w http.ResponseWriter, r *http.Request, boardID int64, errorCode string) {
+	detail, err := a.store.GetBoardDetail(r.Context(), boardID, filterFromCurrentURL(r))
+	if err != nil {
+		handleHTMLStoreError(w, r, err, "/boards")
+		return
 	}
-	return strings.TrimSpace(r.FormValue("title")), true
+	render(w, r, view.BoardContent(detail, errorMessage(errorCode)))
+}
+
+func (a *App) renderCardHTMX(w http.ResponseWriter, r *http.Request, boardID int64, cardID int64) {
+	a.setCardUpdatedTrigger(w, boardID, cardID)
+	a.renderCardDetailArticle(w, r, boardID, cardID, "")
+}
+
+func (a *App) renderCardHTMXErrorCode(w http.ResponseWriter, r *http.Request, boardID int64, cardID int64, code string) {
+	a.renderCardDetailArticle(w, r, boardID, cardID, errorMessage(code))
+}
+
+func (a *App) setCardUpdatedTrigger(w http.ResponseWriter, boardID int64, cardID int64) {
+	payload := map[string]any{
+		"cardUpdated": map[string]any{
+			"boardId": boardID,
+			"cardId":  cardID,
+			"source":  "card-detail",
+		},
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	w.Header().Set("HX-Trigger", string(encoded))
+}
+
+func (a *App) renderCardDetailArticle(w http.ResponseWriter, r *http.Request, boardID int64, cardID int64, message string) {
+	if isArchiveCurrentURL(r, boardID) {
+		detail, err := a.store.GetArchiveDetail(r.Context(), boardID)
+		if err != nil {
+			handleHTMLStoreError(w, r, err, archiveURL(boardID))
+			return
+		}
+		card, ok := findArchiveCard(detail, cardID)
+		if !ok {
+			handleHTMLStoreError(w, r, store.ErrNotFound, archiveURL(boardID))
+			return
+		}
+		render(w, r, view.CardDetailArticle(card, detail.Labels, true, message))
+		return
+	}
+	detail, err := a.store.GetBoardDetail(r.Context(), boardID, filterFromCurrentURL(r))
+	if err != nil {
+		handleHTMLStoreError(w, r, err, boardURL(boardID))
+		return
+	}
+	card, ok := findCard(detail, cardID)
+	if !ok {
+		unfiltered, err := a.store.GetBoardDetail(r.Context(), boardID, store.BoardFilter{})
+		if err != nil {
+			handleHTMLStoreError(w, r, err, boardURL(boardID))
+			return
+		}
+		card, ok = findCard(unfiltered, cardID)
+		if !ok {
+			handleHTMLStoreError(w, r, store.ErrNotFound, boardURL(boardID))
+			return
+		}
+		detail.Labels = unfiltered.Labels
+	}
+	render(w, r, view.CardDetailArticle(card, detail.Labels, false, message))
+}
+
+func isArchiveCurrentURL(r *http.Request, boardID int64) bool {
+	current := htmxCurrentURL(r)
+	return current != nil && current.Path == archiveURL(boardID)
+}
+
+func findArchiveCard(detail store.ArchiveDetail, cardID int64) (store.Card, bool) {
+	for _, card := range detail.Cards {
+		if card.ID == cardID {
+			return card, true
+		}
+	}
+	return store.Card{}, false
+}
+
+func findCard(detail store.BoardDetail, cardID int64) (store.Card, bool) {
+	for _, list := range detail.Lists {
+		for _, card := range list.Cards {
+			if card.ID == cardID {
+				return card, true
+			}
+		}
+	}
+	return store.Card{}, false
 }
 
 func pathID(w http.ResponseWriter, r *http.Request, name string) (int64, bool) {
@@ -703,7 +817,27 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, out any) bool {
 }
 
 func filterFromQuery(r *http.Request) store.BoardFilter {
-	values := r.URL.Query()
+	return filterFromValues(r.URL.Query())
+}
+
+func filterFromRenderRequest(r *http.Request) store.BoardFilter {
+	if r.URL.RawQuery != "" {
+		return filterFromQuery(r)
+	}
+	if isHTMX(r) {
+		return filterFromCurrentURL(r)
+	}
+	return filterFromQuery(r)
+}
+
+func filterFromCurrentURL(r *http.Request) store.BoardFilter {
+	if current := htmxCurrentURL(r); current != nil {
+		return filterFromValues(current.Query())
+	}
+	return filterFromQuery(r)
+}
+
+func filterFromValues(values url.Values) store.BoardFilter {
 	labelID, _ := strconv.ParseInt(values.Get("label"), 10, 64)
 	return store.BoardFilter{
 		Query:  values.Get("q"),
@@ -714,7 +848,22 @@ func filterFromQuery(r *http.Request) store.BoardFilter {
 }
 
 func timelineOptionsFromQuery(r *http.Request) store.TimelineOptions {
-	values := r.URL.Query()
+	return timelineOptionsFromValues(r.URL.Query())
+}
+
+func timelineOptionsFromRenderRequest(r *http.Request) store.TimelineOptions {
+	if r.URL.RawQuery != "" {
+		return timelineOptionsFromQuery(r)
+	}
+	if isHTMX(r) {
+		if current := htmxCurrentURL(r); current != nil {
+			return timelineOptionsFromValues(current.Query())
+		}
+	}
+	return timelineOptionsFromQuery(r)
+}
+
+func timelineOptionsFromValues(values url.Values) store.TimelineOptions {
 	span := values.Get("span")
 	days := 42
 	if span == "quarter" {
@@ -730,18 +879,26 @@ func timelineOptionsFromQuery(r *http.Request) store.TimelineOptions {
 		From:   from,
 		Days:   days,
 		Span:   span,
-		Filter: filterFromQuery(r),
+		Filter: filterFromValues(values),
 	}
+}
+
+func htmxCurrentURL(r *http.Request) *url.URL {
+	value := r.Header.Get("HX-Current-URL")
+	if value == "" {
+		return nil
+	}
+	current, err := url.Parse(value)
+	if err != nil {
+		return nil
+	}
+	return current
 }
 
 func currentWeekStart() time.Time {
 	today := truncateDate(time.Now())
 	offset := (int(today.Weekday()) + 6) % 7
 	return today.AddDate(0, 0, -offset)
-}
-
-func parseDueDate(value string) (sql.NullTime, bool) {
-	return parseDate(value)
 }
 
 func parseDate(value string) (sql.NullTime, bool) {
@@ -793,14 +950,6 @@ func parseInt64List(values []string) ([]int64, bool) {
 		ids = append(ids, id)
 	}
 	return ids, true
-}
-
-func safeLocalReturn(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" || !strings.HasPrefix(value, "/") || strings.HasPrefix(value, "//") {
-		return ""
-	}
-	return value
 }
 
 func boardURL(boardID int64) string {

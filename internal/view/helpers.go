@@ -60,12 +60,12 @@ func cardAction(id int64, action string) templ.SafeURL {
 	return templ.SafeURL(fmt.Sprintf("/cards/%d/%s", id, action))
 }
 
-func checklistItemsAction(id int64) templ.SafeURL {
-	return templ.SafeURL(fmt.Sprintf("/checklists/%d/items", id))
+func checklistItemsAction(cardID int64, checklistID int64) templ.SafeURL {
+	return templ.SafeURL(fmt.Sprintf("/cards/%d/checklists/%d/items", cardID, checklistID))
 }
 
-func checklistToggleAction(id int64) templ.SafeURL {
-	return templ.SafeURL(fmt.Sprintf("/checklist-items/%d/toggle", id))
+func checklistToggleAction(cardID int64, itemID int64) templ.SafeURL {
+	return templ.SafeURL(fmt.Sprintf("/cards/%d/checklist-items/%d/toggle", cardID, itemID))
 }
 
 func idString(id int64) string {
@@ -92,6 +92,10 @@ func cardDeleteDialogID(id int64) string {
 	return fmt.Sprintf("delete-card-%d", id)
 }
 
+func cardDetailID(id int64) string {
+	return fmt.Sprintf("card-%d-detail", id)
+}
+
 func boardData(id int64) string {
 	return fmt.Sprintf("kanbanBoard(%d)", id)
 }
@@ -110,17 +114,6 @@ func appScripts() []string {
 
 func timelineScripts() []string {
 	return []string{"/static/shared.js", "/static/timeline.js"}
-}
-
-func safeScript(path string) templ.SafeURL {
-	return templ.SafeURL(path)
-}
-
-func filterLabelValue(filter store.BoardFilter) string {
-	if filter.Label == 0 {
-		return ""
-	}
-	return idString(filter.Label)
 }
 
 func labelChecked(card store.Card, labelID int64) bool {
@@ -146,13 +139,6 @@ func startDateInput(card store.Card) string {
 	return card.StartAt.Time.Format("2006-01-02")
 }
 
-func dueDateText(card store.Card) string {
-	if !card.DueAt.Valid {
-		return ""
-	}
-	return card.DueAt.Time.Format("2006-01-02")
-}
-
 func cardDateText(card store.Card) string {
 	if card.StartAt.Valid && card.DueAt.Valid {
 		start := card.StartAt.Time.Format("2006-01-02")
@@ -165,7 +151,10 @@ func cardDateText(card store.Card) string {
 	if card.StartAt.Valid {
 		return card.StartAt.Time.Format("2006-01-02")
 	}
-	return dueDateText(card)
+	if card.DueAt.Valid {
+		return card.DueAt.Time.Format("2006-01-02")
+	}
+	return ""
 }
 
 func dateTimeText(value time.Time) string {
@@ -198,13 +187,6 @@ func checklistProgress(card store.Card) string {
 		return ""
 	}
 	return fmt.Sprintf("%d/%d", card.ChecklistCompleted, card.ChecklistTotal)
-}
-
-func checklistPercent(checklist store.Checklist) int {
-	if checklist.TotalCount == 0 {
-		return 0
-	}
-	return checklist.CompletedCount * 100 / checklist.TotalCount
 }
 
 func labelClass(color string) string {

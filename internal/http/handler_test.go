@@ -22,31 +22,139 @@ func TestRootRedirectsToBoards(t *testing.T) {
 
 	New(&fakeStore{}).ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusSeeOther)
-	}
+	assertStatus(t, rec, http.StatusSeeOther)
 	if location := rec.Header().Get("Location"); location != "/boards" {
 		t.Fatalf("location = %q, want /boards", location)
 	}
 }
 
 func TestCreateBoardRedirectsToCreatedBoard(t *testing.T) {
-	form := url.Values{"title": {"Roadmap"}}
-	req := httptest.NewRequest(http.MethodPost, "/boards", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	rec := httptest.NewRecorder()
 	fake := &fakeStore{}
+	rec := serve(formRequest(http.MethodPost, "/boards", url.Values{"title": {"Roadmap"}}), fake)
 
-	New(fake).ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusSeeOther)
-	}
+	assertStatus(t, rec, http.StatusSeeOther)
 	if location := rec.Header().Get("Location"); location != "/boards/7" {
 		t.Fatalf("location = %q, want /boards/7", location)
 	}
 	if fake.createdBoardTitle != "Roadmap" {
 		t.Fatalf("created title = %q, want Roadmap", fake.createdBoardTitle)
+	}
+}
+
+func formRequest(method string, path string, form url.Values) *http.Request {
+	req := httptest.NewRequest(method, path, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return req
+}
+
+func htmxPost(path string, form url.Values) *http.Request {
+	req := formRequest(http.MethodPost, path, form)
+	req.Header.Set("HX-Request", "true")
+	return req
+}
+
+func serve(req *http.Request, fake *fakeStore) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	New(fake).ServeHTTP(rec, req)
+	return rec
+}
+
+func assertStatus(t *testing.T, rec *httptest.ResponseRecorder, status int) {
+	t.Helper()
+	if rec.Code != status {
+		t.Fatalf("status = %d, want %d", rec.Code, status)
+	}
+}
+
+func assertContains(t *testing.T, body string, wants ...string) {
+	t.Helper()
+	for _, want := range wants {
+		if !strings.Contains(body, want) {
+			t.Fatalf("body does not contain %q: %s", want, body)
+		}
+	}
+}
+
+func TestUpdateCardHTMXReturnsDetailArticleAndTrigger(t *testing.T) {
+	req := htmxPost("/cards/9/update", url.Values{"title": {"Updated"}, "description": {"Body"}})
+	req.Header.Set("HX-Current-URL", "http://example.com/boards/7?q=launch")
+	fake := &fakeStore{boardDetail: testBoardDetail()}
+	rec := serve(req, fake)
+
+	assertStatus(t, rec, http.StatusOK)
+	body := rec.Body.String()
+	assertContains(t, body, `id="card-9-detail"`, `data-card-detail`, `hx-target="closest [data-card-detail]"`, `name="title" value="Updated"`)
+	if strings.Contains(body, `hx-swap-oob`) {
+		t.Fatalf("body contains hx-swap-oob: %s", body)
+	}
+	assertContains(t, rec.Header().Get("HX-Trigger"), `cardUpdated`, `"boardId":7`, `"cardId":9`, `"source":"card-detail"`)
+	if fake.boardFilter.Query != "launch" {
+		t.Fatalf("board filter query = %q, want launch", fake.boardFilter.Query)
+	}
+}
+
+func TestUpdateCardHTMXErrorReturnsDetailArticleWithoutTrigger(t *testing.T) {
+	fake := &fakeStore{boardDetail: testBoardDetail()}
+	rec := serve(htmxPost("/cards/9/update", url.Values{"title": {""}, "description": {"Body"}}), fake)
+
+	assertStatus(t, rec, http.StatusOK)
+	body := rec.Body.String()
+	assertContains(t, body, `id="card-9-detail"`, "カード名を入力してください。")
+	if trigger := rec.Header().Get("HX-Trigger"); trigger != "" {
+		t.Fatalf("HX-Trigger = %q, want empty", trigger)
+	}
+	if fake.updatedCardID != 0 {
+		t.Fatalf("updated card id = %d, want 0", fake.updatedCardID)
+	}
+}
+
+func TestUpdateCardHTMXArchiveReturnsArchivedDetailArticle(t *testing.T) {
+	req := htmxPost("/cards/9/update", url.Values{"title": {"Archived Updated"}, "description": {"Body"}})
+	req.Header.Set("HX-Current-URL", "http://example.com/boards/7/archive")
+	fake := &fakeStore{archiveDetail: store.ArchiveDetail{
+		Board:  store.Board{ID: 7, Title: "Board"},
+		Cards:  []store.Card{{ID: 9, ListID: 3, Title: "Archived Updated", Description: "Body"}},
+		Labels: []store.Label{{ID: 5, BoardID: 7, Name: "Bug", Color: "red"}},
+	}}
+	rec := serve(req, fake)
+
+	assertStatus(t, rec, http.StatusOK)
+	body := rec.Body.String()
+	assertContains(t, body, `id="card-9-detail"`, `name="return_to" value="archive"`)
+	if strings.Contains(body, `hx-swap-oob`) {
+		t.Fatalf("body contains hx-swap-oob: %s", body)
+	}
+	assertContains(t, rec.Header().Get("HX-Trigger"), `cardUpdated`)
+}
+
+func TestBoardFilterHTMXRendersListTarget(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/boards/7?q=launch", nil)
+	req.Header.Set("HX-Request", "true")
+	rec := httptest.NewRecorder()
+	fake := &fakeStore{boardDetail: testBoardDetail()}
+
+	New(fake).ServeHTTP(rec, req)
+
+	assertStatus(t, rec, http.StatusOK)
+	body := rec.Body.String()
+	assertContains(t, body, `id="board-dynamic"`, `hx-target="#board-dynamic"`, `id="board-lists"`)
+	if fake.boardFilter.Query != "launch" {
+		t.Fatalf("board filter query = %q, want launch", fake.boardFilter.Query)
+	}
+}
+
+func TestBoardRefreshHTMXUsesCurrentURLFilter(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/boards/7", nil)
+	req.Header.Set("HX-Request", "true")
+	req.Header.Set("HX-Current-URL", "http://example.com/boards/7?q=launch")
+	rec := httptest.NewRecorder()
+	fake := &fakeStore{boardDetail: testBoardDetail()}
+
+	New(fake).ServeHTTP(rec, req)
+
+	assertStatus(t, rec, http.StatusOK)
+	if fake.boardFilter.Query != "launch" {
+		t.Fatalf("board filter query = %q, want launch", fake.boardFilter.Query)
 	}
 }
 
@@ -58,9 +166,7 @@ func TestReorderListsJSON(t *testing.T) {
 
 	New(fake).ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNoContent)
-	}
+	assertStatus(t, rec, http.StatusNoContent)
 	if fake.reorderBoardID != 7 {
 		t.Fatalf("board id = %d, want 7", fake.reorderBoardID)
 	}
@@ -77,9 +183,7 @@ func TestToggleChecklistItemJSON(t *testing.T) {
 
 	New(fake).ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
+	assertStatus(t, rec, http.StatusOK)
 	if fake.toggledItemID != 9 {
 		t.Fatalf("item id = %d, want 9", fake.toggledItemID)
 	}
@@ -95,14 +199,41 @@ func TestBoardTimelineRenders(t *testing.T) {
 
 	New(fake).ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
+	assertStatus(t, rec, http.StatusOK)
 	if fake.timelineBoardID != 7 {
 		t.Fatalf("timeline board id = %d, want 7", fake.timelineBoardID)
 	}
-	if !strings.Contains(rec.Body.String(), "Timeline Board のタイムライン") {
-		t.Fatalf("body does not include timeline title: %s", rec.Body.String())
+	assertContains(t, rec.Body.String(), "Timeline Board のタイムライン")
+}
+
+func TestTimelineFilterHTMXRendersTimelineTarget(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/boards/7/timeline?q=launch", nil)
+	req.Header.Set("HX-Request", "true")
+	rec := httptest.NewRecorder()
+	fake := &fakeStore{}
+
+	New(fake).ServeHTTP(rec, req)
+
+	assertStatus(t, rec, http.StatusOK)
+	body := rec.Body.String()
+	assertContains(t, body, `id="timeline-dynamic"`, `hx-target="#timeline-dynamic"`, `id="timeline-display"`)
+	if fake.timelineFilter.Query != "launch" {
+		t.Fatalf("timeline filter query = %q, want launch", fake.timelineFilter.Query)
+	}
+}
+
+func TestTimelineRefreshHTMXUsesCurrentURLFilter(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/boards/7/timeline", nil)
+	req.Header.Set("HX-Request", "true")
+	req.Header.Set("HX-Current-URL", "http://example.com/boards/7/timeline?q=launch&from=2026-05-04&span=quarter")
+	rec := httptest.NewRecorder()
+	fake := &fakeStore{}
+
+	New(fake).ServeHTTP(rec, req)
+
+	assertStatus(t, rec, http.StatusOK)
+	if fake.timelineFilter.Query != "launch" {
+		t.Fatalf("timeline filter query = %q, want launch", fake.timelineFilter.Query)
 	}
 }
 
@@ -114,9 +245,7 @@ func TestUpdateCardTimelineJSON(t *testing.T) {
 
 	New(fake).ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
+	assertStatus(t, rec, http.StatusOK)
 	if fake.timelineCardID != 9 {
 		t.Fatalf("card id = %d, want 9", fake.timelineCardID)
 	}
@@ -143,9 +272,7 @@ func TestUpdateCardTimelineRejectsInvertedDates(t *testing.T) {
 
 	New(fake).ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
-	}
+	assertStatus(t, rec, http.StatusBadRequest)
 	if fake.timelineCardID != 0 {
 		t.Fatalf("timeline update should not be called, got card id %d", fake.timelineCardID)
 	}
@@ -157,19 +284,14 @@ func TestUpdateCardDatesAcceptsStartAt(t *testing.T) {
 		"due_at":      {"2026-05-08"},
 		"cover_color": {"blue"},
 	}
-	req := httptest.NewRequest(http.MethodPost, "/cards/9/dates", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	rec := httptest.NewRecorder()
-	fake := &fakeStore{}
+	fake := &fakeStore{boardDetail: testBoardDetail()}
+	rec := serve(htmxPost("/cards/9/dates", form), fake)
 
-	New(fake).ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusSeeOther)
-	}
+	assertStatus(t, rec, http.StatusOK)
 	if fake.datesCardID != 9 {
 		t.Fatalf("card id = %d, want 9", fake.datesCardID)
 	}
+	assertContains(t, rec.Body.String(), `id="card-9-detail"`)
 	if got := fake.datesStart.Time.Format("2006-01-02"); got != "2026-05-04" {
 		t.Fatalf("start = %s, want 2026-05-04", got)
 	}
@@ -181,61 +303,116 @@ func TestUpdateCardDatesAcceptsStartAt(t *testing.T) {
 	}
 }
 
-func TestCreateChecklistFallbackRedirectsToBoard(t *testing.T) {
-	form := url.Values{"title": {"Launch"}}
-	req := httptest.NewRequest(http.MethodPost, "/cards/9/checklists", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	rec := httptest.NewRecorder()
-	fake := &fakeStore{}
-
-	New(fake).ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusSeeOther)
+func TestChecklistItemHTMXRoutesUsePathCardID(t *testing.T) {
+	tests := []struct {
+		name   string
+		path   string
+		form   url.Values
+		assert func(*testing.T, *fakeStore)
+	}{
+		{
+			name: "create item",
+			path: "/cards/9/checklists/11/items",
+			form: url.Values{"title": {"Write tests"}},
+			assert: func(t *testing.T, fake *fakeStore) {
+				t.Helper()
+				if fake.createdChecklistItemID != 11 || fake.createdChecklistItemTitle != "Write tests" {
+					t.Fatalf("created checklist item = %d %q, want 11 Write tests", fake.createdChecklistItemID, fake.createdChecklistItemTitle)
+				}
+			},
+		},
+		{
+			name: "toggle item",
+			path: "/cards/9/checklist-items/11/toggle",
+			form: url.Values{"checked": {"true"}},
+			assert: func(t *testing.T, fake *fakeStore) {
+				t.Helper()
+				if fake.toggledItemID != 11 || !fake.toggledChecked {
+					t.Fatalf("toggle = item %d checked %v, want item 11 checked true", fake.toggledItemID, fake.toggledChecked)
+				}
+			},
+		},
 	}
-	if location := rec.Header().Get("Location"); location != "/boards/7" {
-		t.Fatalf("location = %q, want /boards/7", location)
-	}
-	if fake.createdChecklistCardID != 9 {
-		t.Fatalf("checklist card id = %d, want 9", fake.createdChecklistCardID)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := &fakeStore{boardDetail: testBoardDetail()}
+			rec := serve(htmxPost(tt.path, tt.form), fake)
+
+			assertStatus(t, rec, http.StatusOK)
+			assertContains(t, rec.Body.String(), `id="card-9-detail"`)
+			assertContains(t, rec.Header().Get("HX-Trigger"), `cardUpdated`)
+			tt.assert(t, fake)
+		})
 	}
 }
 
-func TestToggleChecklistItemFallbackRedirectsToBoard(t *testing.T) {
-	form := url.Values{"checked": {"true"}}
-	req := httptest.NewRequest(http.MethodPost, "/checklist-items/11/toggle", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	rec := httptest.NewRecorder()
-	fake := &fakeStore{}
+func TestListRenameHTMXReturnsBoardLists(t *testing.T) {
+	fake := &fakeStore{boardDetail: testBoardDetail()}
+	rec := serve(htmxPost("/lists/3/rename", url.Values{"title": {"Renamed"}}), fake)
 
-	New(fake).ServeHTTP(rec, req)
+	assertStatus(t, rec, http.StatusOK)
+	if fake.renamedListID != 3 || fake.renamedListTitle != "Renamed" {
+		t.Fatalf("renamed list = %d %q, want 3 Renamed", fake.renamedListID, fake.renamedListTitle)
+	}
+	assertContains(t, rec.Body.String(), `id="board-lists"`)
+}
 
-	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusSeeOther)
+func TestCreateCardHTMXReturnsBoardWithDialogs(t *testing.T) {
+	fake := &fakeStore{boardDetail: testBoardDetail()}
+	rec := serve(htmxPost("/lists/3/cards", url.Values{"title": {"New Card"}}), fake)
+
+	assertStatus(t, rec, http.StatusOK)
+	if fake.createdCardListID != 3 || fake.createdCardTitle != "New Card" {
+		t.Fatalf("created card = list %d title %q, want list 3 New Card", fake.createdCardListID, fake.createdCardTitle)
 	}
-	if location := rec.Header().Get("Location"); location != "/boards/7" {
-		t.Fatalf("location = %q, want /boards/7", location)
-	}
-	if fake.toggledItemID != 11 || !fake.toggledChecked {
-		t.Fatalf("toggle = item %d checked %v, want item 11 checked true", fake.toggledItemID, fake.toggledChecked)
+	assertContains(t, rec.Body.String(), `id="board-dialogs"`, `id="card-9-detail"`)
+}
+
+func testBoardDetail() store.BoardDetail {
+	return store.BoardDetail{
+		Board: store.Board{ID: 7, Title: "Board"},
+		Lists: []store.List{
+			{
+				ID:      3,
+				BoardID: 7,
+				Title:   "Doing",
+				Cards: []store.Card{
+					{ID: 9, ListID: 3, Title: "Updated", Description: "Body"},
+				},
+			},
+		},
+		Labels: []store.Label{{ID: 5, BoardID: 7, Name: "Bug", Color: "red"}},
 	}
 }
 
 type fakeStore struct {
-	createdBoardTitle      string
-	createdChecklistCardID int64
-	datesCardID            int64
-	datesStart             sql.NullTime
-	datesDue               sql.NullTime
-	datesCover             string
-	reorderBoardID         int64
-	reorderListIDs         []int64
-	timelineBoardID        int64
-	timelineCardID         int64
-	timelineStart          time.Time
-	timelineDue            time.Time
-	toggledItemID          int64
-	toggledChecked         bool
+	createdBoardTitle         string
+	createdChecklistCardID    int64
+	createdChecklistItemID    int64
+	createdChecklistItemTitle string
+	boardDetail               store.BoardDetail
+	archiveDetail             store.ArchiveDetail
+	boardFilter               store.BoardFilter
+	datesCardID               int64
+	datesStart                sql.NullTime
+	datesDue                  sql.NullTime
+	datesCover                string
+	updatedCardID             int64
+	updatedCardTitle          string
+	updatedCardDescription    string
+	renamedListID             int64
+	renamedListTitle          string
+	createdCardListID         int64
+	createdCardTitle          string
+	reorderBoardID            int64
+	reorderListIDs            []int64
+	timelineBoardID           int64
+	timelineFilter            store.BoardFilter
+	timelineCardID            int64
+	timelineStart             time.Time
+	timelineDue               time.Time
+	toggledItemID             int64
+	toggledChecked            bool
 }
 
 func (f *fakeStore) ListBoards(context.Context) ([]store.Board, error) {
@@ -247,16 +424,27 @@ func (f *fakeStore) CreateBoard(_ context.Context, title string) (store.Board, e
 	return store.Board{ID: 7, Title: title}, nil
 }
 
-func (f *fakeStore) GetBoardDetail(context.Context, int64, store.BoardFilter) (store.BoardDetail, error) {
-	return store.BoardDetail{}, store.ErrNotFound
+func (f *fakeStore) GetBoardDetail(_ context.Context, boardID int64, filter store.BoardFilter) (store.BoardDetail, error) {
+	f.boardFilter = filter
+	if f.boardDetail.Board.ID == 0 {
+		return store.BoardDetail{}, store.ErrNotFound
+	}
+	f.boardDetail.Board.ID = boardID
+	f.boardDetail.Filter = filter
+	return f.boardDetail, nil
 }
 
-func (f *fakeStore) GetArchiveDetail(context.Context, int64) (store.ArchiveDetail, error) {
+func (f *fakeStore) GetArchiveDetail(_ context.Context, boardID int64) (store.ArchiveDetail, error) {
+	if f.archiveDetail.Board.ID != 0 {
+		f.archiveDetail.Board.ID = boardID
+		return f.archiveDetail, nil
+	}
 	return store.ArchiveDetail{}, store.ErrNotFound
 }
 
 func (f *fakeStore) GetTimelineDetail(_ context.Context, boardID int64, options store.TimelineOptions) (store.TimelineDetail, error) {
 	f.timelineBoardID = boardID
+	f.timelineFilter = options.Filter
 	if options.From.IsZero() {
 		options.From = time.Date(2026, 5, 4, 0, 0, 0, 0, time.Local)
 	}
@@ -286,20 +474,27 @@ func (f *fakeStore) CreateList(context.Context, int64, string) (store.List, erro
 	return store.List{}, nil
 }
 
-func (f *fakeStore) RenameList(context.Context, int64, string) (int64, error) {
-	return 0, nil
+func (f *fakeStore) RenameList(_ context.Context, listID int64, title string) (int64, error) {
+	f.renamedListID = listID
+	f.renamedListTitle = title
+	return 7, nil
 }
 
 func (f *fakeStore) DeleteList(context.Context, int64) (int64, error) {
 	return 0, nil
 }
 
-func (f *fakeStore) CreateCard(context.Context, int64, string) (store.Card, error) {
-	return store.Card{}, nil
+func (f *fakeStore) CreateCard(_ context.Context, listID int64, title string) (store.Card, error) {
+	f.createdCardListID = listID
+	f.createdCardTitle = title
+	return store.Card{ID: 10, ListID: listID, Title: title}, nil
 }
 
-func (f *fakeStore) UpdateCard(context.Context, int64, string, string) (int64, error) {
-	return 0, nil
+func (f *fakeStore) UpdateCard(_ context.Context, cardID int64, title string, description string) (int64, error) {
+	f.updatedCardID = cardID
+	f.updatedCardTitle = title
+	f.updatedCardDescription = description
+	return 7, nil
 }
 
 func (f *fakeStore) UpdateCardDates(_ context.Context, cardID int64, startAt sql.NullTime, dueAt sql.NullTime, coverColor string) (int64, error) {
@@ -354,7 +549,9 @@ func (f *fakeStore) CreateChecklist(_ context.Context, cardID int64, _ string) (
 	return 7, nil
 }
 
-func (f *fakeStore) CreateChecklistItem(context.Context, int64, string) (int64, error) {
+func (f *fakeStore) CreateChecklistItem(_ context.Context, checklistID int64, title string) (int64, error) {
+	f.createdChecklistItemID = checklistID
+	f.createdChecklistItemTitle = title
 	return 7, nil
 }
 
@@ -365,7 +562,7 @@ func (f *fakeStore) ToggleChecklistItem(_ context.Context, itemID int64, checked
 }
 
 func (f *fakeStore) BoardIDForList(context.Context, int64) (int64, error) {
-	return 0, nil
+	return 7, nil
 }
 
 func (f *fakeStore) BoardIDForCard(context.Context, int64) (int64, error) {

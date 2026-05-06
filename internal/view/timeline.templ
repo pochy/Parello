@@ -8,6 +8,7 @@ templ TimelinePage(detail store.TimelineDetail, pageError string) {
 
 templ TimelineContent(detail store.TimelineDetail, pageError string) {
 	<main
+		id="timeline-page"
 		x-data={ timelineData(detail) }
 		x-on:keydown.window="if ($event.key === '/' && !['INPUT','TEXTAREA','SELECT'].includes($event.target.tagName)) { $event.preventDefault(); $refs.timelineSearch?.focus(); }"
 		class="flex min-h-dvh flex-col bg-zinc-100"
@@ -33,28 +34,34 @@ templ TimelineContent(detail store.TimelineDetail, pageError string) {
 						<a href={ boardArchiveURL(detail.Board.ID) } class="btn-outline whitespace-nowrap">アーカイブ</a>
 					</nav>
 				</div>
-				<form action={ boardTimelineURL(detail.Board.ID) } method="get" class="grid gap-2 rounded-md border border-zinc-200 bg-zinc-50 p-3 lg:grid-cols-[1fr_160px_160px_160px_auto]">
+				<form
+					action={ boardTimelineURL(detail.Board.ID) }
+					method="get"
+					hx-get={ boardTimelineURL(detail.Board.ID) }
+					hx-target="#timeline-dynamic"
+					hx-select="#timeline-dynamic"
+					hx-swap="outerHTML"
+					hx-push-url="true"
+					hx-trigger="submit, keyup changed delay:400ms from:#timeline-filter-q, change from:#timeline-filter-label, change from:#timeline-filter-due, change from:#timeline-filter-status"
+					class="grid gap-2 rounded-md border border-zinc-200 bg-zinc-50 p-3 lg:grid-cols-[1fr_160px_160px_160px_auto]"
+				>
 					<input type="hidden" name="from" value={ detail.From.Format("2006-01-02") }/>
 					<input type="hidden" name="span" value={ detail.Span }/>
-					<label class="sr-only" for="timeline-filter-q">カード検索</label>
-					<input id="timeline-filter-q" x-ref="timelineSearch" class="input" type="search" name="q" value={ detail.Filter.Query } placeholder="カードを検索"/>
-					<label class="sr-only" for="timeline-filter-label">ラベル</label>
-					<select id="timeline-filter-label" class="select" name="label">
+					<input id="timeline-filter-q" x-ref="timelineSearch" aria-label="カード検索" class="input" type="search" name="q" value={ detail.Filter.Query } placeholder="カードを検索"/>
+					<select id="timeline-filter-label" aria-label="ラベル" class="select" name="label">
 						<option value="">すべてのラベル</option>
 						for _, label := range detail.Labels {
 							<option value={ idString(label.ID) } selected?={ detail.Filter.Label == label.ID }>{ label.Name }</option>
 						}
 					</select>
-					<label class="sr-only" for="timeline-filter-due">期限</label>
-					<select id="timeline-filter-due" class="select" name="due">
+					<select id="timeline-filter-due" aria-label="期限" class="select" name="due">
 						<option value="">すべての期限</option>
 						<option value="overdue" selected?={ detail.Filter.Due == "overdue" }>期限切れ</option>
 						<option value="today" selected?={ detail.Filter.Due == "today" }>今日</option>
 						<option value="week" selected?={ detail.Filter.Due == "week" }>7日以内</option>
 						<option value="none" selected?={ detail.Filter.Due == "none" }>期限なし</option>
 					</select>
-					<label class="sr-only" for="timeline-filter-status">状態</label>
-					<select id="timeline-filter-status" class="select" name="status">
+					<select id="timeline-filter-status" aria-label="状態" class="select" name="status">
 						<option value="">すべての状態</option>
 						<option value="incomplete" selected?={ detail.Filter.Status == "incomplete" }>未完了</option>
 						<option value="complete" selected?={ detail.Filter.Status == "complete" }>完了</option>
@@ -72,33 +79,58 @@ templ TimelineContent(detail store.TimelineDetail, pageError string) {
 			}
 			<p x-cloak x-show="timelineError" x-text="timelineError" class="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"></p>
 		</header>
-		<section class="flex-1 overflow-auto px-4 py-5 sm:px-6">
-			if len(detail.Lists) == 0 {
-				<div class="flex min-h-64 max-w-xl flex-col items-center justify-center gap-3 rounded-md border border-dashed border-zinc-300 bg-white p-8 text-center">
-					<h2 class="text-balance text-xl font-semibold">リストがありません</h2>
-					<p class="text-pretty text-sm text-zinc-600">ボード画面で最初のリストを作成できます。</p>
-				</div>
-			} else {
-				<div class="min-w-max overflow-hidden rounded-md border border-zinc-200 bg-white shadow-sm">
-					<div class="grid" style={ timelineBoardStyle(len(detail.Days)) }>
-						<div class="sticky left-0 z-20 border-b border-r border-zinc-200 bg-zinc-50 px-4 py-3 text-sm font-semibold text-zinc-700">リスト</div>
-						<div class="grid border-b border-zinc-200" style={ timelineGridStyle(len(detail.Days)) }>
-							for _, day := range detail.Days {
-								<div class={ timelineDayClass(day) }>
-									<span class="font-medium">{ timelineDayLabel(day) }</span>
-									<span>{ timelineWeekdayLabel(day) }</span>
-								</div>
-							}
-						</div>
-						for _, list := range detail.Lists {
-							@TimelineListRow(detail, list)
+		@TimelineDynamic(detail)
+	</main>
+}
+
+templ TimelineDynamic(detail store.TimelineDetail) {
+	<div id="timeline-dynamic" class="contents">
+		@TimelineDisplay(detail)
+		@TimelineDialogs(detail)
+	</div>
+}
+
+templ TimelineDisplay(detail store.TimelineDetail) {
+	<div
+		id="timeline-display"
+		class="contents"
+		hx-get={ boardTimelineURL(detail.Board.ID) }
+		hx-target="#timeline-display"
+		hx-select="#timeline-display"
+		hx-swap="outerHTML"
+		hx-trigger="cardUpdated from:body throttle:200ms"
+	>
+		@TimelineBoardSection(detail)
+		@TimelineUnscheduled(detail)
+	</div>
+}
+
+templ TimelineBoardSection(detail store.TimelineDetail) {
+	<section id="timeline-board" class="flex-1 overflow-auto px-4 py-5 sm:px-6">
+		if len(detail.Lists) == 0 {
+			<div class="flex min-h-64 max-w-xl flex-col items-center justify-center gap-3 rounded-md border border-dashed border-zinc-300 bg-white p-8 text-center">
+				<h2 class="text-balance text-xl font-semibold">リストがありません</h2>
+				<p class="text-pretty text-sm text-zinc-600">ボード画面で最初のリストを作成できます。</p>
+			</div>
+		} else {
+			<div class="min-w-max overflow-hidden rounded-md border border-zinc-200 bg-white shadow-sm">
+				<div class="grid" style={ timelineBoardStyle(len(detail.Days)) }>
+					<div class="sticky left-0 z-20 border-b border-r border-zinc-200 bg-zinc-50 px-4 py-3 text-sm font-semibold text-zinc-700">リスト</div>
+					<div class="grid border-b border-zinc-200" style={ timelineGridStyle(len(detail.Days)) }>
+						for _, day := range detail.Days {
+							<div class={ timelineDayClass(day) }>
+								<span class="font-medium">{ timelineDayLabel(day) }</span>
+								<span>{ timelineWeekdayLabel(day) }</span>
+							</div>
 						}
 					</div>
+					for _, list := range detail.Lists {
+						@TimelineListRow(detail, list)
+					}
 				</div>
-			}
-		</section>
-		@TimelineUnscheduled(detail)
-	</main>
+			</div>
+		}
+	</section>
 }
 
 templ TimelineListRow(detail store.TimelineDetail, list store.TimelineList) {
@@ -116,31 +148,34 @@ templ TimelineListRow(detail store.TimelineDetail, list store.TimelineList) {
 			<div class="pointer-events-none absolute inset-y-0 w-px bg-blue-500" style={ timelineTodayStyle(detail) } aria-hidden="true"></div>
 		}
 		for _, card := range list.Cards {
-			<button
-				type="button"
-				data-timeline-card
-				data-card-id={ idString(card.Card.ID) }
-				data-title={ card.Card.Title }
-				data-start={ card.StartDate.Format("2006-01-02") }
-				data-due={ card.DueDate.Format("2006-01-02") }
-				data-start-offset={ intString(card.StartOffset) }
-				data-due-offset={ intString(card.DueOffset) }
-				style={ timelineCardStyle(card) }
-				class={ timelineCardClasses(card) }
-				title={ card.Card.Title + " " + timelineRangeText(card) }
-				x-on:pointerdown="startTimelineDrag($event)"
-				x-on:click={ timelineOpenCardAction(card.Card.ID) }
-			>
-				<span data-timeline-handle="start" class="absolute inset-y-1 left-0 w-2 cursor-ew-resize rounded-l bg-black/10" aria-hidden="true"></span>
-				<span class="min-w-0 flex-1 truncate font-medium">{ card.Card.Title }</span>
-				if card.Card.CompletedAt.Valid {
-					<span class="shrink-0 rounded bg-white/70 px-1.5 py-0.5 text-[11px]">完了</span>
-				}
-				<span data-timeline-handle="end" class="absolute inset-y-1 right-0 w-2 cursor-ew-resize rounded-r bg-black/10" aria-hidden="true"></span>
-			</button>
-			@CardDetailDialog(card.Card, detail.Labels, false)
+			@TimelineCardButton(card)
 		}
 	</div>
+}
+
+templ TimelineCardButton(card store.TimelineCard) {
+	<button
+		type="button"
+		data-timeline-card
+		data-card-id={ idString(card.Card.ID) }
+		data-title={ card.Card.Title }
+		data-start={ card.StartDate.Format("2006-01-02") }
+		data-due={ card.DueDate.Format("2006-01-02") }
+		data-start-offset={ intString(card.StartOffset) }
+		data-due-offset={ intString(card.DueOffset) }
+		style={ timelineCardStyle(card) }
+		class={ timelineCardClasses(card) }
+		title={ card.Card.Title + " " + timelineRangeText(card) }
+		x-on:pointerdown="startTimelineDrag($event)"
+		x-on:click={ timelineOpenCardAction(card.Card.ID) }
+	>
+		<span data-timeline-handle="start" class="absolute inset-y-1 left-0 w-2 cursor-ew-resize rounded-l bg-black/10" aria-hidden="true"></span>
+		<span class="min-w-0 flex-1 truncate font-medium">{ card.Card.Title }</span>
+		if card.Card.CompletedAt.Valid {
+			<span class="shrink-0 rounded bg-white/70 px-1.5 py-0.5 text-[11px]">完了</span>
+		}
+		<span data-timeline-handle="end" class="absolute inset-y-1 right-0 w-2 cursor-ew-resize rounded-r bg-black/10" aria-hidden="true"></span>
+	</button>
 }
 
 templ TimelineUnscheduled(detail store.TimelineDetail) {
@@ -164,21 +199,30 @@ templ TimelineUnscheduled(detail store.TimelineDetail) {
 									</div>
 									<button type="button" class="btn-sm-outline shrink-0" data-dialog={ cardDialogID(card.ID) } onclick="document.getElementById(this.dataset.dialog).showModal()">詳細</button>
 								</div>
-								<form action={ cardAction(card.ID, "dates") } method="post" class="form mt-3 grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
-									<label for={ "timeline-start-" + idString(card.ID) } class="sr-only">開始日</label>
-									<input id={ "timeline-start-" + idString(card.ID) } class="input" type="date" name="start_at" required/>
-									<label for={ "timeline-due-" + idString(card.ID) } class="sr-only">期限</label>
-									<input id={ "timeline-due-" + idString(card.ID) } class="input" type="date" name="due_at" required/>
+								<form hx-post={ cardAction(card.ID, "dates") } hx-swap="none" class="form mt-3 grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+									<input aria-label="開始日" class="input" type="date" name="start_at" required/>
+									<input aria-label="期限" class="input" type="date" name="due_at" required/>
 									<input type="hidden" name="cover_color" value={ card.CoverColor }/>
-									<input type="hidden" name="return_to" value={ string(timelineURL(detail.Board.ID, detail.From, detail.Span, detail.Filter)) }/>
 									<button type="submit" class="btn-outline whitespace-nowrap">追加</button>
 								</form>
 							</article>
-							@CardDetailDialog(card, detail.Labels, false)
 						}
 					}
 				</div>
 			</div>
 		</section>
 	}
+}
+
+templ TimelineDialogs(detail store.TimelineDetail) {
+	<div id="timeline-dialogs">
+		for _, list := range detail.Lists {
+			for _, card := range list.Cards {
+				@CardDetailDialog(card.Card, detail.Labels, false)
+			}
+			for _, card := range list.Unscheduled {
+				@CardDetailDialog(card, detail.Labels, false)
+			}
+		}
+	</div>
 }
