@@ -206,16 +206,32 @@ templ ListColumn(list store.List, labels []store.Label) {
 }
 
 templ CardTile(card store.Card) {
-	<article data-card-id={ idString(card.ID) } x-sort:item={ idString(card.ID) } class="card card-hover overflow-hidden p-0 [body:not(.sorting)_&]:hover:border-zinc-300">
+	<article data-card-id={ idString(card.ID) } x-sort:item={ idString(card.ID) } class="card card-hover relative overflow-hidden p-0 [body:not(.sorting)_&]:hover:border-zinc-300">
 		if coverClass(card.CoverColor) != "" {
 			<div class={ "h-8 " + coverClass(card.CoverColor) }></div>
 		}
 		<button
 			type="button"
+			x-sort:handle
+			class="absolute right-2 top-2 z-10 grid size-8 cursor-grab place-items-center rounded-md border border-zinc-200 bg-white/95 text-zinc-500 shadow-sm transition hover:border-zinc-300 hover:text-zinc-900 active:cursor-grabbing"
+			aria-label="カードをドラッグして移動"
+			title="カードをドラッグして移動"
+		>
+			<span aria-hidden="true" class="grid grid-cols-2 gap-0.5">
+				<span class="size-1 rounded-full bg-current"></span>
+				<span class="size-1 rounded-full bg-current"></span>
+				<span class="size-1 rounded-full bg-current"></span>
+				<span class="size-1 rounded-full bg-current"></span>
+				<span class="size-1 rounded-full bg-current"></span>
+				<span class="size-1 rounded-full bg-current"></span>
+			</span>
+		</button>
+		<button
+			type="button"
 			x-sort:ignore
 			data-dialog={ cardDialogID(card.ID) }
 			onclick="document.getElementById(this.dataset.dialog).showModal()"
-			class="block w-full p-3 text-left"
+			class="block w-full p-3 pr-12 text-left"
 		>
 			if len(card.Labels) > 0 {
 				<span class="mb-2 flex flex-wrap gap-1">

@@ -35,6 +35,7 @@ func TestBoardDynamicRendersListsAndDialogs(t *testing.T) {
 	assertSelectionLength(t, doc, "#board-lists", 1)
 	assertSelectionLength(t, doc, "#board-dialogs", 1)
 	assertSelectionLength(t, doc, `[data-card-id="9"]`, 1)
+	assertSelectionLength(t, doc, `[data-card-id="9"] button[x-sort\:handle][aria-label="カードをドラッグして移動"]`, 1)
 	assertSelectionLength(t, doc, `[data-card-detail]`, 1)
 	if title := strings.TrimSpace(doc.Find(`[data-card-id="9"] button span.text-sm`).Text()); title != "Write templ tests" {
 		t.Fatalf("card title = %q, want %q", title, "Write templ tests")

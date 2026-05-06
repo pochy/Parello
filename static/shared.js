@@ -1,13 +1,17 @@
 window.GolangKanban = (() => {
 	function csrfToken() {
-		return document.querySelector('meta[name="csrf-token"]')?.content || '';
+		return document.querySelector('meta[name="csrf-token"]')?.content
+			|| document.querySelector('input[name="_csrf"]')?.value
+			|| '';
 	}
 
 	async function patchJSON(url, payload) {
 		const response = await fetch(url, {
 			method: 'PATCH',
+			credentials: 'same-origin',
 			headers: {
 				'Content-Type': 'application/json',
+				'Accept': 'application/json',
 				'X-CSRF-Token': csrfToken(),
 			},
 			body: JSON.stringify(payload),
