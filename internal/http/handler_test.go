@@ -283,22 +283,22 @@ func assertContains(t *testing.T, body string, wants ...string) {
 	}
 }
 
-func TestUpdateCardHTMXReturnsDetailArticleAndTrigger(t *testing.T) {
+func TestUpdateCardHTMXReturnsBodyFormAndTrigger(t *testing.T) {
 	req := htmxPost("/cards/9/update", url.Values{"title": {"Updated"}, "description": {"Body"}})
 	req.Header.Set("HX-Current-URL", "http://example.com/boards/7?q=launch")
-	fake := &fakeStore{boardDetail: testBoardDetail()}
+	fake := &fakeStore{}
 	rec := serve(req, fake)
 
 	assertStatus(t, rec, http.StatusOK)
 	body := rec.Body.String()
-	assertContains(t, body, `id="card-9-detail"`, `data-card-detail`, `hx-target="closest [data-card-detail]"`, `name="title" value="Updated"`)
+	assertContains(t, body, `data-card-body-form`, `hx-trigger="blur from:input, blur from:textarea"`, `hx-target="closest [data-card-body-form]"`, `name="title" value="Updated"`, `Body`)
+	if strings.Contains(body, `data-card-detail`) {
+		t.Fatalf("body contains full card detail article: %s", body)
+	}
 	if strings.Contains(body, `hx-swap-oob`) {
 		t.Fatalf("body contains hx-swap-oob: %s", body)
 	}
 	assertContains(t, rec.Header().Get("HX-Trigger"), `cardUpdated`, `"boardId":7`, `"cardId":9`, `"source":"card-detail"`)
-	if fake.boardFilter.Query != "launch" {
-		t.Fatalf("board filter query = %q, want launch", fake.boardFilter.Query)
-	}
 }
 
 func TestUpdateCardHTMXErrorReturnsDetailArticleWithoutTrigger(t *testing.T) {
@@ -316,7 +316,7 @@ func TestUpdateCardHTMXErrorReturnsDetailArticleWithoutTrigger(t *testing.T) {
 	}
 }
 
-func TestUpdateCardHTMXArchiveReturnsArchivedDetailArticle(t *testing.T) {
+func TestUpdateCardHTMXArchiveReturnsBodyForm(t *testing.T) {
 	req := htmxPost("/cards/9/update", url.Values{"title": {"Archived Updated"}, "description": {"Body"}})
 	req.Header.Set("HX-Current-URL", "http://example.com/boards/7/archive")
 	fake := &fakeStore{archiveDetail: store.ArchiveDetail{
@@ -328,7 +328,10 @@ func TestUpdateCardHTMXArchiveReturnsArchivedDetailArticle(t *testing.T) {
 
 	assertStatus(t, rec, http.StatusOK)
 	body := rec.Body.String()
-	assertContains(t, body, `id="card-9-detail"`, `name="return_to" value="archive"`)
+	assertContains(t, body, `data-card-body-form`, `name="title" value="Archived Updated"`, `Body`)
+	if strings.Contains(body, `name="return_to" value="archive"`) {
+		t.Fatalf("body contains archive actions: %s", body)
+	}
 	if strings.Contains(body, `hx-swap-oob`) {
 		t.Fatalf("body contains hx-swap-oob: %s", body)
 	}
@@ -513,7 +516,8 @@ func TestUpdateCardDatesAcceptsStartAt(t *testing.T) {
 	if fake.datesCardID != 9 {
 		t.Fatalf("card id = %d, want 9", fake.datesCardID)
 	}
-	assertContains(t, rec.Body.String(), `id="card-9-detail"`)
+	assertContains(t, rec.Body.String(), `data-card-meta-section`)
+	assertContains(t, rec.Header().Get("HX-Trigger"), `cardUpdated`, `"boardId":7`, `"cardId":9`)
 	if got := fake.datesStart.Time.Format("2006-01-02"); got != "2026-05-04" {
 		t.Fatalf("start = %s, want 2026-05-04", got)
 	}
@@ -527,15 +531,17 @@ func TestUpdateCardDatesAcceptsStartAt(t *testing.T) {
 
 func TestChecklistItemHTMXRoutesUsePathCardID(t *testing.T) {
 	tests := []struct {
-		name   string
-		path   string
-		form   url.Values
-		assert func(*testing.T, *fakeStore)
+		name                    string
+		path                    string
+		form                    url.Values
+		wantsCardUpdatedTrigger bool
+		assert                  func(*testing.T, *fakeStore)
 	}{
 		{
-			name: "create item",
-			path: "/cards/9/checklists/11/items",
-			form: url.Values{"title": {"Write tests"}},
+			name:                    "create item",
+			path:                    "/cards/9/checklists/11/items",
+			form:                    url.Values{"title": {"Write tests"}},
+			wantsCardUpdatedTrigger: true,
 			assert: func(t *testing.T, fake *fakeStore) {
 				t.Helper()
 				if fake.createdChecklistItemID != 11 || fake.createdChecklistItemTitle != "Write tests" {
@@ -544,9 +550,10 @@ func TestChecklistItemHTMXRoutesUsePathCardID(t *testing.T) {
 			},
 		},
 		{
-			name: "toggle item",
-			path: "/cards/9/checklist-items/11/toggle",
-			form: url.Values{"checked": {"true"}},
+			name:                    "toggle item",
+			path:                    "/cards/9/checklist-items/11/toggle",
+			form:                    url.Values{"checked": {"true"}},
+			wantsCardUpdatedTrigger: true,
 			assert: func(t *testing.T, fake *fakeStore) {
 				t.Helper()
 				if fake.toggledItemID != 11 || !fake.toggledChecked {
@@ -561,8 +568,12 @@ func TestChecklistItemHTMXRoutesUsePathCardID(t *testing.T) {
 			rec := serve(htmxPost(tt.path, tt.form), fake)
 
 			assertStatus(t, rec, http.StatusOK)
-			assertContains(t, rec.Body.String(), `id="card-9-detail"`)
-			assertContains(t, rec.Header().Get("HX-Trigger"), `cardUpdated`)
+			assertContains(t, rec.Body.String(), `data-checklist-section`)
+			if tt.wantsCardUpdatedTrigger {
+				assertContains(t, rec.Header().Get("HX-Trigger"), `cardUpdated`)
+			} else if got := rec.Header().Get("HX-Trigger"); got != "" {
+				t.Fatalf("HX-Trigger = %q, want empty", got)
+			}
 			tt.assert(t, fake)
 		})
 	}

@@ -264,8 +264,7 @@ templ CardDetailArticle(card store.Card, labels []store.Label, archived bool, er
 				}
 				<div class="flex items-start justify-between gap-4">
 					<div class="min-w-0">
-						<h2 class="text-balance text-2xl font-semibold">{ card.Title }</h2>
-						<p class="mt-2 text-sm text-zinc-500">Card #{ idString(card.ID) } ・ { completionText(card) }</p>
+						<p class="text-sm text-zinc-500">Card #{ idString(card.ID) } ・ { completionText(card) }</p>
 					</div>
 					<button type="button" class="btn-sm-outline shrink-0" aria-label="カード詳細を閉じる" data-dialog={ cardDialogID(card.ID) } onclick="document.getElementById(this.dataset.dialog).close()">×</button>
 				</div>
@@ -277,20 +276,13 @@ templ CardDetailArticle(card store.Card, labels []store.Label, archived bool, er
 		}
 		<div class="grid gap-8 py-6 lg:grid-cols-[minmax(0,1fr)_320px] xl:grid-cols-[minmax(0,1fr)_340px]">
 			<div class="space-y-8">
-				<form hx-post={ cardAction(card.ID, "update") } class="form grid gap-4">
-					@CSRFInput()
-					<span class="label">タイトル</span>
-					<input aria-label="タイトル" class="input" type="text" name="title" value={ card.Title } required/>
-					<span class="label">説明</span>
-					<textarea aria-label="説明" class="textarea min-h-40" name="description" placeholder="説明を追加">{ card.Description }</textarea>
-					<button type="submit" class="btn w-fit">本文を保存</button>
-				</form>
-				<section class="space-y-4">
+				@CardBodyForm(card)
+				<section data-card-labels-section class="space-y-4">
 					<h3 class="text-sm font-semibold text-zinc-700">ラベル</h3>
 					if len(labels) == 0 {
 						<p class="text-sm text-zinc-600">ボード上部のラベル管理からラベルを作成できます。</p>
 					} else {
-						<form hx-post={ cardAction(card.ID, "labels") } class="form space-y-3">
+						<form hx-post={ cardAction(card.ID, "labels") } hx-target="closest [data-card-labels-section]" hx-swap="outerHTML" class="form space-y-3">
 							@CSRFInput()
 							<div class="flex flex-wrap gap-2">
 				for _, label := range labels {
@@ -305,57 +297,10 @@ templ CardDetailArticle(card store.Card, labels []store.Label, archived bool, er
 						</form>
 					}
 				</section>
-				<section class="space-y-4">
-					<div class="flex items-center justify-between gap-3">
-						<h3 class="text-sm font-semibold text-zinc-700">チェックリスト</h3>
-						if card.ChecklistTotal > 0 {
-							<span class="text-sm tabular-nums text-zinc-500">{ checklistProgress(card) }</span>
-						}
-					</div>
-					for _, checklist := range card.Checklists {
-							<div class="card">
-								<header class="flex items-center justify-between gap-3">
-									<h4 class="font-medium">{ checklist.Title }</h4>
-									<span class="text-xs tabular-nums text-zinc-500">{ idString(int64(checklist.CompletedCount)) }/{ idString(int64(checklist.TotalCount)) }</span>
-								</header>
-								if len(checklist.Items) == 0 {
-									<section class="text-sm text-zinc-500">項目がありません。</section>
-								} else {
-									<section class="grid gap-2">
-									for _, item := range checklist.Items {
-										<form hx-post={ checklistToggleAction(card.ID, item.ID) } class="flex items-center gap-2">
-											@CSRFInput()
-											if item.CheckedAt.Valid {
-												<input type="hidden" name="checked" value="false"/>
-													<button type="submit" class="btn-sm-outline size-5 shrink-0 border-green-500 bg-green-500 p-0 text-xs text-white" aria-label="未完了に戻す">✓</button>
-												<span class="text-sm text-zinc-500 line-through">{ item.Title }</span>
-											} else {
-												<input type="hidden" name="checked" value="true"/>
-													<button type="submit" class="btn-sm-outline size-5 shrink-0 p-0" aria-label="完了にする"></button>
-												<span class="text-sm text-zinc-800">{ item.Title }</span>
-											}
-										</form>
-									}
-									</section>
-								}
-								<footer>
-									<form hx-post={ checklistItemsAction(card.ID, checklist.ID) } class="form flex gap-2">
-										@CSRFInput()
-										<input aria-label="チェック項目" class="input" type="text" name="title" placeholder="項目を追加" required/>
-										<button type="submit" class="btn-outline whitespace-nowrap">追加</button>
-									</form>
-								</footer>
-							</div>
-					}
-					<form hx-post={ cardAction(card.ID, "checklists") } class="form flex gap-2">
-						@CSRFInput()
-						<input aria-label="チェックリスト名" class="input" type="text" name="title" placeholder="チェックリスト名" required/>
-						<button type="submit" class="btn-outline whitespace-nowrap">作成</button>
-					</form>
-				</section>
-				<section class="space-y-4">
+				@CardChecklistSection(card)
+				<section data-card-comments-section class="space-y-4">
 					<h3 class="text-sm font-semibold text-zinc-700">コメント</h3>
-					<form hx-post={ cardAction(card.ID, "comments") } class="form grid gap-2">
+					<form hx-post={ cardAction(card.ID, "comments") } hx-target="closest [data-card-comments-section]" hx-swap="outerHTML" class="form grid gap-2">
 						@CSRFInput()
 						<textarea aria-label="コメント" class="textarea min-h-28" name="body" placeholder="コメントを書く" required></textarea>
 						<button type="submit" class="btn-outline w-fit">コメントを追加</button>
@@ -377,9 +322,9 @@ templ CardDetailArticle(card store.Card, labels []store.Label, archived bool, er
 						</div>
 					}
 				</section>
-				<section class="space-y-4">
+				<section data-card-attachments-section class="space-y-4">
 					<h3 class="text-sm font-semibold text-zinc-700">添付リンク</h3>
-					<form hx-post={ cardAction(card.ID, "attachments") } class="form grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+					<form hx-post={ cardAction(card.ID, "attachments") } hx-target="closest [data-card-attachments-section]" hx-swap="outerHTML" class="form grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
 						@CSRFInput()
 						<input aria-label="リンク名" class="input" type="text" name="title" placeholder="リンク名" required/>
 						<input aria-label="URL" class="input" type="url" name="url" placeholder="https://example.com" required/>
@@ -409,8 +354,8 @@ templ CardDetailArticle(card store.Card, labels []store.Label, archived bool, er
 					}
 				</section>
 			</div>
-			<aside class="space-y-5 rounded-md border border-zinc-200 bg-zinc-50 p-4 lg:sticky lg:top-6 lg:self-start">
-				<form hx-post={ cardAction(card.ID, "dates") } class="form grid gap-4">
+			<aside data-card-meta-section class="space-y-5 rounded-md border border-zinc-200 bg-zinc-50 p-4 lg:sticky lg:top-6 lg:self-start">
+				<form hx-post={ cardAction(card.ID, "dates") } hx-target="closest [data-card-meta-section]" hx-swap="outerHTML" class="form grid gap-4">
 					@CSRFInput()
 					<span class="label">開始日</span>
 					<input aria-label="開始日" class="input" type="date" name="start_at" value={ startDateInput(card) }/>
@@ -433,7 +378,7 @@ templ CardDetailArticle(card store.Card, labels []store.Label, archived bool, er
 				if card.StartAt.Valid || card.DueAt.Valid {
 					<p class={ dueBadgeClass(card) }>日付: { cardDateText(card) }</p>
 				}
-				<form hx-post={ cardAction(card.ID, "complete") }>
+				<form hx-post={ cardAction(card.ID, "complete") } hx-target="closest [data-card-meta-section]" hx-swap="outerHTML">
 					@CSRFInput()
 					if card.CompletedAt.Valid {
 						<input type="hidden" name="complete" value="false"/>
@@ -460,6 +405,193 @@ templ CardDetailArticle(card store.Card, labels []store.Label, archived bool, er
 			</aside>
 		</div>
 	</article>
+}
+
+templ CardChecklistSection(card store.Card) {
+	<section data-checklist-section class="space-y-4">
+		<div class="flex items-center justify-between gap-3">
+			<h3 class="text-sm font-semibold text-zinc-700">チェックリスト</h3>
+			if card.ChecklistTotal > 0 {
+				<span class="text-sm tabular-nums text-zinc-500">{ checklistProgress(card) }</span>
+			}
+		</div>
+		for _, checklist := range card.Checklists {
+				<div class="card">
+					<header class="flex items-center justify-between gap-3">
+						<h4 class="font-medium">{ checklist.Title }</h4>
+						<span class="text-xs tabular-nums text-zinc-500">{ idString(int64(checklist.CompletedCount)) }/{ idString(int64(checklist.TotalCount)) }</span>
+					</header>
+					if len(checklist.Items) == 0 {
+						<section class="text-sm text-zinc-500">項目がありません。</section>
+					} else {
+						<section class="grid gap-2">
+						for _, item := range checklist.Items {
+							<form
+								hx-post={ checklistToggleAction(card.ID, item.ID) }
+								hx-target="closest [data-checklist-section]"
+								hx-swap="outerHTML"
+								class="flex items-center gap-2"
+							>
+								@CSRFInput()
+								if item.CheckedAt.Valid {
+									<input type="hidden" name="checked" value="false"/>
+										<button type="submit" class="btn-sm-outline size-5 shrink-0 border-green-500 bg-green-500 p-0 text-xs text-white" aria-label="未完了に戻す">✓</button>
+									<span class="text-sm text-zinc-500 line-through">{ item.Title }</span>
+								} else {
+									<input type="hidden" name="checked" value="true"/>
+										<button type="submit" class="btn-sm-outline size-5 shrink-0 p-0" aria-label="完了にする"></button>
+									<span class="text-sm text-zinc-800">{ item.Title }</span>
+								}
+							</form>
+						}
+						</section>
+					}
+					<footer>
+						<form hx-post={ checklistItemsAction(card.ID, checklist.ID) } hx-target="closest [data-checklist-section]" hx-swap="outerHTML" class="form flex gap-2">
+							@CSRFInput()
+							<input aria-label="チェック項目" class="input" type="text" name="title" placeholder="項目を追加" required/>
+							<button type="submit" class="btn-outline whitespace-nowrap">追加</button>
+						</form>
+					</footer>
+				</div>
+		}
+		<form hx-post={ cardAction(card.ID, "checklists") } hx-target="closest [data-checklist-section]" hx-swap="outerHTML" class="form flex gap-2">
+			@CSRFInput()
+			<input aria-label="チェックリスト名" class="input" type="text" name="title" placeholder="チェックリスト名" required/>
+			<button type="submit" class="btn-outline whitespace-nowrap">作成</button>
+		</form>
+	</section>
+}
+
+templ CardLabelsSection(card store.Card, labels []store.Label) {
+	<section data-card-labels-section class="space-y-4">
+		<h3 class="text-sm font-semibold text-zinc-700">ラベル</h3>
+		if len(labels) == 0 {
+			<p class="text-sm text-zinc-600">ボード上部のラベル管理からラベルを作成できます。</p>
+		} else {
+			<form hx-post={ cardAction(card.ID, "labels") } hx-target="closest [data-card-labels-section]" hx-swap="outerHTML" class="form space-y-3">
+				@CSRFInput()
+				<div class="flex flex-wrap gap-2">
+					for _, label := range labels {
+						<label class="inline-flex items-center gap-2 rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm">
+							<input type="checkbox" class="input" name="label_id" value={ idString(label.ID) } checked?={ labelChecked(card, label.ID) }/>
+							<span class={ "size-3 rounded " + labelDotClass(label.Color) }></span>
+							<span>{ label.Name }</span>
+						</label>
+					}
+				</div>
+				<button type="submit" class="btn-outline w-fit">ラベルを保存</button>
+			</form>
+		}
+	</section>
+}
+
+templ CardBodyForm(card store.Card) {
+	<form hx-post={ cardAction(card.ID, "update") } hx-trigger="blur from:input, blur from:textarea" hx-target="closest [data-card-body-form]" hx-swap="outerHTML" data-card-body-form class="form grid gap-4">
+		@CSRFInput()
+		<span class="label">タイトル</span>
+		<input aria-label="タイトル" class="input" type="text" name="title" value={ card.Title } required/>
+		<span class="label">説明</span>
+		<textarea aria-label="説明" class="textarea min-h-40" name="description" placeholder="説明を追加">{ card.Description }</textarea>
+	</form>
+}
+
+templ CardCommentsSection(card store.Card) {
+	<section data-card-comments-section class="space-y-4">
+		<h3 class="text-sm font-semibold text-zinc-700">コメント</h3>
+		<form hx-post={ cardAction(card.ID, "comments") } hx-target="closest [data-card-comments-section]" hx-swap="outerHTML" class="form grid gap-2">
+			@CSRFInput()
+			<textarea aria-label="コメント" class="textarea min-h-28" name="body" placeholder="コメントを書く" required></textarea>
+			<button type="submit" class="btn-outline w-fit">コメントを追加</button>
+		</form>
+		if len(card.Comments) == 0 {
+			<p class="text-sm text-zinc-500">コメントはまだありません。</p>
+		} else {
+			<div class="grid gap-2">
+				for _, comment := range card.Comments {
+					<article class="card">
+						<section>
+							<p class="whitespace-pre-wrap text-sm text-zinc-800">{ comment.Body }</p>
+						</section>
+						<footer>
+							<p class="text-xs tabular-nums text-zinc-500">{ dateTimeText(comment.CreatedAt) }</p>
+						</footer>
+					</article>
+				}
+			</div>
+		}
+	</section>
+}
+
+templ CardAttachmentsSection(card store.Card) {
+	<section data-card-attachments-section class="space-y-4">
+		<h3 class="text-sm font-semibold text-zinc-700">添付リンク</h3>
+		<form hx-post={ cardAction(card.ID, "attachments") } hx-target="closest [data-card-attachments-section]" hx-swap="outerHTML" class="form grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+			@CSRFInput()
+			<input aria-label="リンク名" class="input" type="text" name="title" placeholder="リンク名" required/>
+			<input aria-label="URL" class="input" type="url" name="url" placeholder="https://example.com" required/>
+			<button type="submit" class="btn-outline whitespace-nowrap">追加</button>
+		</form>
+		for _, attachment := range card.Attachments {
+			if safeURL, ok := attachmentURL(attachment.URL); ok {
+				<a href={ safeURL } target="_blank" rel="noreferrer" class="card block text-sm font-medium text-zinc-800 hover:border-zinc-300">
+					<section>{ attachment.Title }</section>
+				</a>
+			}
+		}
+	</section>
+}
+
+templ CardMetaSection(card store.Card, archived bool) {
+	<aside data-card-meta-section class="space-y-5 rounded-md border border-zinc-200 bg-zinc-50 p-4 lg:sticky lg:top-6 lg:self-start">
+		<form hx-post={ cardAction(card.ID, "dates") } hx-target="closest [data-card-meta-section]" hx-swap="outerHTML" class="form grid gap-4">
+			@CSRFInput()
+			<span class="label">開始日</span>
+			<input aria-label="開始日" class="input" type="date" name="start_at" value={ startDateInput(card) }/>
+			<span class="label">期限</span>
+			<input aria-label="期限" class="input" type="date" name="due_at" value={ dueDateInput(card) }/>
+			<span class="label">カバー色</span>
+			<select aria-label="カバー色" class="select" name="cover_color">
+				<option value="">なし</option>
+				<option value="green" selected?={ card.CoverColor == "green" }>Green</option>
+				<option value="yellow" selected?={ card.CoverColor == "yellow" }>Yellow</option>
+				<option value="orange" selected?={ card.CoverColor == "orange" }>Orange</option>
+				<option value="red" selected?={ card.CoverColor == "red" }>Red</option>
+				<option value="blue" selected?={ card.CoverColor == "blue" }>Blue</option>
+				<option value="purple" selected?={ card.CoverColor == "purple" }>Purple</option>
+				<option value="pink" selected?={ card.CoverColor == "pink" }>Pink</option>
+				<option value="gray" selected?={ card.CoverColor == "gray" }>Gray</option>
+			</select>
+			<button type="submit" class="btn-outline">日付/カバーを保存</button>
+		</form>
+		if card.StartAt.Valid || card.DueAt.Valid {
+			<p class={ dueBadgeClass(card) }>日付: { cardDateText(card) }</p>
+		}
+		<form hx-post={ cardAction(card.ID, "complete") } hx-target="closest [data-card-meta-section]" hx-swap="outerHTML">
+			@CSRFInput()
+			if card.CompletedAt.Valid {
+				<input type="hidden" name="complete" value="false"/>
+				<button type="submit" class="btn-outline w-full">未完了に戻す</button>
+			} else {
+				<input type="hidden" name="complete" value="true"/>
+				<button type="submit" class="btn w-full">完了にする</button>
+			}
+		</form>
+		if archived {
+			<form action={ cardAction(card.ID, "restore") } method="post">
+				@CSRFInput()
+				<input type="hidden" name="return_to" value="archive"/>
+				<button type="submit" class="btn w-full">復元</button>
+			</form>
+		} else {
+			<form action={ cardAction(card.ID, "archive") } method="post">
+				@CSRFInput()
+				<button type="submit" class="btn-outline w-full">アーカイブ</button>
+			</form>
+		}
+		<button type="button" class="btn-destructive w-full" data-dialog={ cardDeleteDialogID(card.ID) } onclick="document.getElementById(this.dataset.dialog).showModal()">完全に削除</button>
+		<button type="button" class="btn-outline w-full" data-dialog={ cardDialogID(card.ID) } onclick="document.getElementById(this.dataset.dialog).close()">閉じる</button>
+	</aside>
 }
 
 templ DeleteBoardDialog(board store.Board) {

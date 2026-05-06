@@ -329,7 +329,8 @@ func (a *App) updateCard(w http.ResponseWriter, r *http.Request) {
 		handleHTMLStoreError(w, r, err, boardURL(boardID))
 		return
 	}
-	a.renderCardHTMX(w, r, boardID, cardID)
+	a.setCardUpdatedTrigger(w, boardID, cardID)
+	render(w, r, view.CardBodyForm(store.Card{ID: cardID, Title: title, Description: description}))
 }
 
 func (a *App) updateCardDates(w http.ResponseWriter, r *http.Request) {
@@ -364,7 +365,8 @@ func (a *App) updateCardDates(w http.ResponseWriter, r *http.Request) {
 		handleHTMLStoreError(w, r, err, boardURL(boardID))
 		return
 	}
-	a.renderCardHTMX(w, r, boardID, cardID)
+	a.setCardUpdatedTrigger(w, boardID, cardID)
+	a.renderCardMetaSection(w, r, boardID, cardID)
 }
 
 func (a *App) completeCard(w http.ResponseWriter, r *http.Request) {
@@ -385,7 +387,8 @@ func (a *App) completeCard(w http.ResponseWriter, r *http.Request) {
 		handleHTMLStoreError(w, r, err, boardURL(boardID))
 		return
 	}
-	a.renderCardHTMX(w, r, boardID, cardID)
+	a.setCardUpdatedTrigger(w, boardID, cardID)
+	a.renderCardMetaSection(w, r, boardID, cardID)
 }
 
 func (a *App) archiveCard(w http.ResponseWriter, r *http.Request) {
@@ -458,7 +461,8 @@ func (a *App) setCardLabels(w http.ResponseWriter, r *http.Request) {
 		handleHTMLStoreError(w, r, err, boardURL(boardID))
 		return
 	}
-	a.renderCardHTMX(w, r, boardID, cardID)
+	a.setCardUpdatedTrigger(w, boardID, cardID)
+	a.renderCardLabelsSection(w, r, boardID, cardID)
 }
 
 func (a *App) addComment(w http.ResponseWriter, r *http.Request) {
@@ -483,7 +487,8 @@ func (a *App) addComment(w http.ResponseWriter, r *http.Request) {
 		handleHTMLStoreError(w, r, err, boardURL(boardID))
 		return
 	}
-	a.renderCardHTMX(w, r, boardID, cardID)
+	a.setCardUpdatedTrigger(w, boardID, cardID)
+	a.renderCardCommentsSection(w, r, boardID, cardID)
 }
 
 func (a *App) addAttachment(w http.ResponseWriter, r *http.Request) {
@@ -508,7 +513,8 @@ func (a *App) addAttachment(w http.ResponseWriter, r *http.Request) {
 		handleHTMLStoreError(w, r, err, boardURL(boardID))
 		return
 	}
-	a.renderCardHTMX(w, r, boardID, cardID)
+	a.setCardUpdatedTrigger(w, boardID, cardID)
+	a.renderCardAttachmentsSection(w, r, boardID, cardID)
 }
 
 func (a *App) createChecklist(w http.ResponseWriter, r *http.Request) {
@@ -534,7 +540,8 @@ func (a *App) createChecklist(w http.ResponseWriter, r *http.Request) {
 		handleHTMLStoreError(w, r, err, boardURL(boardID))
 		return
 	}
-	a.renderCardHTMX(w, r, boardID, cardID)
+	a.setCardUpdatedTrigger(w, boardID, cardID)
+	a.renderCardChecklistSection(w, r, boardID, cardID)
 }
 
 func (a *App) createChecklistItem(w http.ResponseWriter, r *http.Request) {
@@ -565,7 +572,8 @@ func (a *App) createChecklistItem(w http.ResponseWriter, r *http.Request) {
 		handleHTMLStoreError(w, r, err, "/boards")
 		return
 	}
-	a.renderCardHTMX(w, r, boardID, cardID)
+	a.setCardUpdatedTrigger(w, boardID, cardID)
+	a.renderCardChecklistSection(w, r, boardID, cardID)
 }
 
 func (a *App) toggleChecklistItem(w http.ResponseWriter, r *http.Request) {
@@ -591,7 +599,8 @@ func (a *App) toggleChecklistItem(w http.ResponseWriter, r *http.Request) {
 		handleHTMLStoreError(w, r, err, "/boards")
 		return
 	}
-	a.renderCardHTMX(w, r, boardID, cardID)
+	a.setCardUpdatedTrigger(w, boardID, cardID)
+	a.renderCardChecklistSection(w, r, boardID, cardID)
 }
 
 func (a *App) reorderLists(w http.ResponseWriter, r *http.Request) {
@@ -769,6 +778,81 @@ func (a *App) renderCardDetailArticle(w http.ResponseWriter, r *http.Request, bo
 		detail.Labels = unfiltered.Labels
 	}
 	render(w, r, view.CardDetailArticle(card, detail.Labels, false, message))
+}
+
+func (a *App) renderCardChecklistSection(w http.ResponseWriter, r *http.Request, boardID int64, cardID int64) {
+	card, labels, err := a.loadCardFromBoard(r, boardID, cardID)
+	if err != nil {
+		handleHTMLStoreError(w, r, err, boardURL(boardID))
+		return
+	}
+	_ = labels
+	render(w, r, view.CardChecklistSection(card))
+}
+
+func (a *App) renderCardLabelsSection(w http.ResponseWriter, r *http.Request, boardID int64, cardID int64) {
+	card, labels, err := a.loadCardFromBoard(r, boardID, cardID)
+	if err != nil {
+		handleHTMLStoreError(w, r, err, boardURL(boardID))
+		return
+	}
+	render(w, r, view.CardLabelsSection(card, labels))
+}
+
+func (a *App) renderCardBodyForm(w http.ResponseWriter, r *http.Request, boardID int64, cardID int64) {
+	card, _, err := a.loadCardFromBoard(r, boardID, cardID)
+	if err != nil {
+		handleHTMLStoreError(w, r, err, boardURL(boardID))
+		return
+	}
+	render(w, r, view.CardBodyForm(card))
+}
+
+func (a *App) renderCardCommentsSection(w http.ResponseWriter, r *http.Request, boardID int64, cardID int64) {
+	card, _, err := a.loadCardFromBoard(r, boardID, cardID)
+	if err != nil {
+		handleHTMLStoreError(w, r, err, boardURL(boardID))
+		return
+	}
+	render(w, r, view.CardCommentsSection(card))
+}
+
+func (a *App) renderCardAttachmentsSection(w http.ResponseWriter, r *http.Request, boardID int64, cardID int64) {
+	card, _, err := a.loadCardFromBoard(r, boardID, cardID)
+	if err != nil {
+		handleHTMLStoreError(w, r, err, boardURL(boardID))
+		return
+	}
+	render(w, r, view.CardAttachmentsSection(card))
+}
+
+func (a *App) renderCardMetaSection(w http.ResponseWriter, r *http.Request, boardID int64, cardID int64) {
+	card, _, err := a.loadCardFromBoard(r, boardID, cardID)
+	if err != nil {
+		handleHTMLStoreError(w, r, err, boardURL(boardID))
+		return
+	}
+	render(w, r, view.CardMetaSection(card, false))
+}
+
+func (a *App) loadCardFromBoard(r *http.Request, boardID int64, cardID int64) (store.Card, []store.Label, error) {
+	detail, err := a.store.GetBoardDetail(r.Context(), boardID, filterFromCurrentURL(r))
+	if err != nil {
+		return store.Card{}, nil, err
+	}
+	card, ok := findCard(detail, cardID)
+	if !ok {
+		unfiltered, err := a.store.GetBoardDetail(r.Context(), boardID, store.BoardFilter{})
+		if err != nil {
+			return store.Card{}, nil, err
+		}
+		card, ok = findCard(unfiltered, cardID)
+		if !ok {
+			return store.Card{}, nil, store.ErrNotFound
+		}
+		detail = unfiltered
+	}
+	return card, detail.Labels, nil
 }
 
 func isArchiveCurrentURL(r *http.Request, boardID int64) bool {
