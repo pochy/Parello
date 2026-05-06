@@ -1,0 +1,16 @@
+package view
+
+templ EmptyState(title string, description string) {
+	<div class="flex min-h-64 min-w-0 flex-1 flex-col items-center justify-center gap-6 rounded-lg border border-dashed p-6 text-center text-balance text-neutral-800 md:p-12">
+		<header class="flex max-w-sm flex-col items-center gap-3 text-center">
+			<h3 class="text-lg font-semibold tracking-tight">{ title }</h3>
+			<p class="text-muted-foreground text-sm/relaxed">{ description }</p>
+		</header>
+	</div>
+}
+
+templ ErrorAlert(message string) {
+	<div class="alert-destructive">
+		<h2>{ message }</h2>
+	</div>
+}

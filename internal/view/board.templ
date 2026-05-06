@@ -41,9 +41,13 @@ templ BoardContent(detail store.BoardDetail, pageError string) {
 				</div>
 			</div>
 			if pageError != "" {
-				<p class="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{ pageError }</p>
+				<div class="mt-3">
+					@ErrorAlert(pageError)
+				</div>
 			}
-			<p x-cloak x-show="sortError" x-text="sortError" class="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"></p>
+			<div x-cloak x-show="sortError" class="mt-3 alert-destructive">
+				<h2 x-text="sortError"></h2>
+			</div>
 		</header>
 		@BoardDynamic(detail)
 		@DeleteBoardDialog(detail.Board)
@@ -91,34 +95,38 @@ templ FilterBar(detail store.BoardDetail) {
 }
 
 templ LabelManager(detail store.BoardDetail) {
-	<details class="rounded-md border border-zinc-200 bg-zinc-50 p-3">
-		<summary class="cursor-pointer text-sm font-medium text-zinc-700">ラベル管理</summary>
-		<div class="mt-3 grid gap-3">
-			if len(detail.Labels) == 0 {
-				<p class="text-sm text-zinc-600">ラベルはまだありません。</p>
-			} else {
-				<div class="flex flex-wrap gap-2">
-					for _, label := range detail.Labels {
-						<span class={ "inline-flex items-center rounded px-2 py-1 text-xs font-medium " + labelClass(label.Color) }>{ label.Name }</span>
-					}
-				</div>
-			}
-			<form hx-post={ boardAction(detail.Board.ID, "labels") } class="grid gap-2 sm:grid-cols-[1fr_150px_auto]">
-				<input aria-label="ラベル名" class="input" type="text" name="name" placeholder="ラベル名" required/>
-				<select aria-label="ラベル色" class="select" name="color" required>
-					<option value="green">Green</option>
-					<option value="yellow">Yellow</option>
-					<option value="orange">Orange</option>
-					<option value="red">Red</option>
-					<option value="blue">Blue</option>
-					<option value="purple">Purple</option>
-					<option value="pink">Pink</option>
-					<option value="gray">Gray</option>
-				</select>
-				<button type="submit" class="btn-outline whitespace-nowrap">追加</button>
-			</form>
-		</div>
-	</details>
+	<section class="accordion rounded-md border border-zinc-200 bg-zinc-50 px-3">
+		<details class="group">
+			<summary class="w-full rounded-md outline-none transition-all focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50">
+				<h2 class="flex flex-1 items-start justify-between gap-4 py-3 text-left text-sm font-medium text-zinc-700 hover:underline">ラベル管理</h2>
+			</summary>
+			<section class="grid gap-3 pb-3">
+				if len(detail.Labels) == 0 {
+					<p class="text-sm text-zinc-600">ラベルはまだありません。</p>
+				} else {
+					<div class="flex flex-wrap gap-2">
+						for _, label := range detail.Labels {
+							<span class={ "badge " + labelClass(label.Color) }>{ label.Name }</span>
+						}
+					</div>
+				}
+				<form hx-post={ boardAction(detail.Board.ID, "labels") } class="grid gap-2 sm:grid-cols-[1fr_150px_auto]">
+					<input aria-label="ラベル名" class="input" type="text" name="name" placeholder="ラベル名" required/>
+					<select aria-label="ラベル色" class="select" name="color" required>
+						<option value="green">Green</option>
+						<option value="yellow">Yellow</option>
+						<option value="orange">Orange</option>
+						<option value="red">Red</option>
+						<option value="blue">Blue</option>
+						<option value="purple">Purple</option>
+						<option value="pink">Pink</option>
+						<option value="gray">Gray</option>
+					</select>
+					<button type="submit" class="btn-outline whitespace-nowrap">追加</button>
+				</form>
+			</section>
+		</details>
+	</section>
 }
 
 templ BoardDynamic(detail store.BoardDetail) {
@@ -139,9 +147,8 @@ templ BoardListsSection(detail store.BoardDetail) {
 		class="flex-1 overflow-x-auto px-4 py-5 sm:px-6"
 	>
 		if len(detail.Lists) == 0 {
-			<div class="flex min-h-64 max-w-xl flex-col items-center justify-center gap-3 rounded-md border border-dashed border-zinc-300 bg-white p-8 text-center">
-				<h2 class="text-balance text-xl font-semibold">リストがありません</h2>
-				<p class="text-pretty text-sm text-zinc-600">上部のフォームから最初のリストを作成できます。</p>
+			<div class="max-w-xl">
+				@EmptyState("リストがありません", "上部のフォームから最初のリストを作成できます。")
 			</div>
 		} else {
 			<div x-sort="reorderLists($el)" class="flex min-w-full items-start gap-4 pb-6">
@@ -194,7 +201,7 @@ templ ListColumn(list store.List, labels []store.Label) {
 }
 
 templ CardTile(card store.Card) {
-	<article data-card-id={ idString(card.ID) } x-sort:item={ idString(card.ID) } class="card-hover overflow-hidden rounded-md border border-zinc-200 bg-white shadow-sm [body:not(.sorting)_&]:hover:border-zinc-300">
+	<article data-card-id={ idString(card.ID) } x-sort:item={ idString(card.ID) } class="card card-hover overflow-hidden p-0 [body:not(.sorting)_&]:hover:border-zinc-300">
 		if coverClass(card.CoverColor) != "" {
 			<div class={ "h-8 " + coverClass(card.CoverColor) }></div>
 		}
@@ -208,7 +215,7 @@ templ CardTile(card store.Card) {
 			if len(card.Labels) > 0 {
 				<span class="mb-2 flex flex-wrap gap-1">
 					for _, label := range card.Labels {
-						<span class={ "rounded px-2 py-0.5 text-xs font-medium " + labelClass(label.Color) }>{ label.Name }</span>
+						<span class={ "badge " + labelClass(label.Color) }>{ label.Name }</span>
 					}
 				</span>
 			}
@@ -221,16 +228,16 @@ templ CardTile(card store.Card) {
 					<span class={ dueBadgeClass(card) }>{ cardDateText(card) }</span>
 				}
 				if card.CompletedAt.Valid {
-					<span class="rounded bg-green-100 px-2 py-0.5 text-green-700">完了</span>
+					<span class="badge-outline bg-green-100 text-green-700">完了</span>
 				}
 				if card.ChecklistTotal > 0 {
-					<span class="rounded bg-zinc-100 px-2 py-0.5 tabular-nums">Checklist { checklistProgress(card) }</span>
+					<span class="badge-outline tabular-nums">Checklist { checklistProgress(card) }</span>
 				}
 				if card.CommentCount > 0 {
-					<span class="rounded bg-zinc-100 px-2 py-0.5 tabular-nums">Comments { idString(int64(card.CommentCount)) }</span>
+					<span class="badge-outline tabular-nums">Comments { idString(int64(card.CommentCount)) }</span>
 				}
 				if card.AttachmentCount > 0 {
-					<span class="rounded bg-zinc-100 px-2 py-0.5 tabular-nums">Links { idString(int64(card.AttachmentCount)) }</span>
+					<span class="badge-outline tabular-nums">Links { idString(int64(card.AttachmentCount)) }</span>
 				}
 			</span>
 		</button>
@@ -249,17 +256,19 @@ templ CardDetailArticle(card store.Card, labels []store.Label, archived bool, er
 		<header class="border-b border-zinc-200 pb-6">
 			if coverClass(card.CoverColor) != "" {
 				<div class={ "mb-5 h-24 rounded-md " + coverClass(card.CoverColor) }></div>
-			}
-			<div class="flex items-start justify-between gap-4">
-				<div class="min-w-0">
-					<h2 class="text-balance text-2xl font-semibold">{ card.Title }</h2>
-					<p class="mt-2 text-sm text-zinc-500">Card #{ idString(card.ID) } ・ { completionText(card) }</p>
+				}
+				<div class="flex items-start justify-between gap-4">
+					<div class="min-w-0">
+						<h2 class="text-balance text-2xl font-semibold">{ card.Title }</h2>
+						<p class="mt-2 text-sm text-zinc-500">Card #{ idString(card.ID) } ・ { completionText(card) }</p>
+					</div>
+					<button type="button" class="btn-sm-outline shrink-0" aria-label="カード詳細を閉じる" data-dialog={ cardDialogID(card.ID) } onclick="document.getElementById(this.dataset.dialog).close()">×</button>
 				</div>
-				<button type="button" class="btn-sm-outline shrink-0" aria-label="カード詳細を閉じる" data-dialog={ cardDialogID(card.ID) } onclick="document.getElementById(this.dataset.dialog).close()">×</button>
-			</div>
 		</header>
 		if errorMessage != "" {
-			<p class="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{ errorMessage }</p>
+			<div class="mt-4">
+				@ErrorAlert(errorMessage)
+			</div>
 		}
 		<div class="grid gap-8 py-6 lg:grid-cols-[minmax(0,1fr)_320px] xl:grid-cols-[minmax(0,1fr)_340px]">
 			<div class="space-y-8">
@@ -277,12 +286,12 @@ templ CardDetailArticle(card store.Card, labels []store.Label, archived bool, er
 					} else {
 						<form hx-post={ cardAction(card.ID, "labels") } class="form space-y-3">
 							<div class="flex flex-wrap gap-2">
-								for _, label := range labels {
-									<label class="inline-flex items-center gap-2 rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm">
-										<input type="checkbox" name="label_id" value={ idString(label.ID) } checked?={ labelChecked(card, label.ID) }/>
-										<span class={ "size-3 rounded " + labelDotClass(label.Color) }></span>
-										<span>{ label.Name }</span>
-									</label>
+				for _, label := range labels {
+					<label class="inline-flex items-center gap-2 rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm">
+						<input type="checkbox" class="input" name="label_id" value={ idString(label.ID) } checked?={ labelChecked(card, label.ID) }/>
+						<span class={ "size-3 rounded " + labelDotClass(label.Color) }></span>
+						<span>{ label.Name }</span>
+					</label>
 								}
 							</div>
 							<button type="submit" class="btn-outline w-fit">ラベルを保存</button>
@@ -297,35 +306,37 @@ templ CardDetailArticle(card store.Card, labels []store.Label, archived bool, er
 						}
 					</div>
 					for _, checklist := range card.Checklists {
-						<div class="rounded-md border border-zinc-200 bg-white p-3">
-							<div class="flex items-center justify-between gap-3">
-								<h4 class="font-medium">{ checklist.Title }</h4>
-								<span class="text-xs tabular-nums text-zinc-500">{ idString(int64(checklist.CompletedCount)) }/{ idString(int64(checklist.TotalCount)) }</span>
-							</div>
-							if len(checklist.Items) == 0 {
-								<p class="mt-2 text-sm text-zinc-500">項目がありません。</p>
-							} else {
-								<div class="mt-3 grid gap-2">
+							<div class="card">
+								<header class="flex items-center justify-between gap-3">
+									<h4 class="font-medium">{ checklist.Title }</h4>
+									<span class="text-xs tabular-nums text-zinc-500">{ idString(int64(checklist.CompletedCount)) }/{ idString(int64(checklist.TotalCount)) }</span>
+								</header>
+								if len(checklist.Items) == 0 {
+									<section class="text-sm text-zinc-500">項目がありません。</section>
+								} else {
+									<section class="grid gap-2">
 									for _, item := range checklist.Items {
 										<form hx-post={ checklistToggleAction(card.ID, item.ID) } class="flex items-center gap-2">
 											if item.CheckedAt.Valid {
 												<input type="hidden" name="checked" value="false"/>
-												<button type="submit" class="size-5 rounded border border-green-500 bg-green-500 text-xs text-white" aria-label="未完了に戻す">✓</button>
+													<button type="submit" class="btn-sm-outline size-5 shrink-0 border-green-500 bg-green-500 p-0 text-xs text-white" aria-label="未完了に戻す">✓</button>
 												<span class="text-sm text-zinc-500 line-through">{ item.Title }</span>
 											} else {
 												<input type="hidden" name="checked" value="true"/>
-												<button type="submit" class="size-5 rounded border border-zinc-300 bg-white" aria-label="完了にする"></button>
+													<button type="submit" class="btn-sm-outline size-5 shrink-0 p-0" aria-label="完了にする"></button>
 												<span class="text-sm text-zinc-800">{ item.Title }</span>
 											}
 										</form>
 									}
-								</div>
-							}
-							<form hx-post={ checklistItemsAction(card.ID, checklist.ID) } class="form mt-3 flex gap-2">
-								<input aria-label="チェック項目" class="input" type="text" name="title" placeholder="項目を追加" required/>
-								<button type="submit" class="btn-outline whitespace-nowrap">追加</button>
-							</form>
-						</div>
+									</section>
+								}
+								<footer>
+									<form hx-post={ checklistItemsAction(card.ID, checklist.ID) } class="form flex gap-2">
+										<input aria-label="チェック項目" class="input" type="text" name="title" placeholder="項目を追加" required/>
+										<button type="submit" class="btn-outline whitespace-nowrap">追加</button>
+									</form>
+								</footer>
+							</div>
 					}
 					<form hx-post={ cardAction(card.ID, "checklists") } class="form flex gap-2">
 						<input aria-label="チェックリスト名" class="input" type="text" name="title" placeholder="チェックリスト名" required/>
@@ -343,9 +354,13 @@ templ CardDetailArticle(card store.Card, labels []store.Label, archived bool, er
 					} else {
 						<div class="grid gap-2">
 							for _, comment := range card.Comments {
-								<article class="rounded-md border border-zinc-200 bg-white p-3">
-									<p class="whitespace-pre-wrap text-sm text-zinc-800">{ comment.Body }</p>
-									<p class="mt-2 text-xs tabular-nums text-zinc-500">{ dateTimeText(comment.CreatedAt) }</p>
+								<article class="card">
+									<section>
+										<p class="whitespace-pre-wrap text-sm text-zinc-800">{ comment.Body }</p>
+									</section>
+									<footer>
+										<p class="text-xs tabular-nums text-zinc-500">{ dateTimeText(comment.CreatedAt) }</p>
+									</footer>
 								</article>
 							}
 						</div>
@@ -359,7 +374,9 @@ templ CardDetailArticle(card store.Card, labels []store.Label, archived bool, er
 						<button type="submit" class="btn-outline whitespace-nowrap">追加</button>
 					</form>
 					for _, attachment := range card.Attachments {
-						<a href={ templ.SafeURL(attachment.URL) } target="_blank" rel="noreferrer" class="block rounded-md border border-zinc-200 bg-white p-3 text-sm font-medium text-zinc-800 hover:border-zinc-300">{ attachment.Title }</a>
+						<a href={ templ.SafeURL(attachment.URL) } target="_blank" rel="noreferrer" class="card block text-sm font-medium text-zinc-800 hover:border-zinc-300">
+							<section>{ attachment.Title }</section>
+						</a>
 					}
 				</section>
 				<section class="space-y-4">
@@ -492,10 +509,12 @@ templ ArchiveContent(detail store.ArchiveDetail, pageError string) {
 				<a href={ boardURL(detail.Board.ID) } class="text-sm font-medium text-zinc-500 hover:text-zinc-900">ボードへ戻る</a>
 				<h1 class="mt-2 text-balance text-2xl font-semibold">{ detail.Board.Title } のアーカイブ</h1>
 			</div>
-		</header>
-		if pageError != "" {
-			<p class="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{ pageError }</p>
-		}
+	</header>
+	if pageError != "" {
+		<div class="mb-4">
+			@ErrorAlert(pageError)
+		</div>
+	}
 		@ArchiveDynamic(detail)
 	</main>
 }
@@ -517,15 +536,14 @@ templ ArchiveCardsSection(detail store.ArchiveDetail) {
 		hx-trigger="cardUpdated from:body throttle:200ms"
 	>
 		if len(detail.Cards) == 0 {
-			<section class="flex min-h-64 max-w-xl flex-col items-center justify-center gap-3 rounded-md border border-dashed border-zinc-300 bg-white p-8 text-center">
-				<h2 class="text-balance text-xl font-semibold">アーカイブ済みカードはありません</h2>
-				<p class="text-pretty text-sm text-zinc-600">カード詳細からアーカイブするとここに表示されます。</p>
-			</section>
+			<div class="max-w-xl">
+				@EmptyState("アーカイブ済みカードはありません", "カード詳細からアーカイブするとここに表示されます。")
+			</div>
 		} else {
 			<section class="grid gap-3">
 				for _, card := range detail.Cards {
-					<article class="rounded-md border border-zinc-200 bg-white p-4 shadow-sm">
-						<div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+					<article class="card">
+						<section class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
 							<div class="min-w-0">
 								<h2 class="truncate text-lg font-semibold">{ card.Title }</h2>
 								if card.Description != "" {
@@ -533,7 +551,7 @@ templ ArchiveCardsSection(detail store.ArchiveDetail) {
 								}
 								<div class="mt-3 flex flex-wrap gap-2">
 									for _, label := range card.Labels {
-										<span class={ "rounded px-2 py-0.5 text-xs font-medium " + labelClass(label.Color) }>{ label.Name }</span>
+										<span class={ "badge " + labelClass(label.Color) }>{ label.Name }</span>
 									}
 									if card.StartAt.Valid || card.DueAt.Valid {
 										<span class={ dueBadgeClass(card) }>{ cardDateText(card) }</span>
@@ -547,7 +565,7 @@ templ ArchiveCardsSection(detail store.ArchiveDetail) {
 									<button type="submit" class="btn">復元</button>
 								</form>
 							</div>
-						</div>
+						</section>
 					</article>
 				}
 			</section>

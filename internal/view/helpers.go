@@ -162,7 +162,7 @@ func dateTimeText(value time.Time) string {
 }
 
 func dueBadgeClass(card store.Card) string {
-	base := "rounded px-2 py-0.5 text-xs tabular-nums "
+	base := "badge-outline tabular-nums "
 	if !card.DueAt.Valid {
 		return base + "bg-zinc-100 text-zinc-600"
 	}
